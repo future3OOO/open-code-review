@@ -35,9 +35,7 @@ An open-source, AI-powered code review CLI tool. Argus reads git diffs, analyzes
 # 1. Build
 make build
 
-# 2. Create config
-cp internal/config/example_config.yaml ./argus.yaml
-# Edit model names, prompts, thresholds...
+# 2. Create config (write your own argus.yaml)
 
 # 3. Run review on staged changes
 ./bin/argus --staged \
@@ -96,7 +94,6 @@ Argus/
 │   │   └── agent.go      # Core review agent (Plan + Main Loop)
 │   ├── config/
 │   │   ├── template.go   # Template YAML struct definitions
-│   │   ├── example_config.yaml  # Sample configuration
 │   │   └── example_tools.go     # Tool implementation stubs
 │   ├── diff/
 │   │   ├── parser.go     # Unified diff parser

@@ -96,6 +96,8 @@ func expandShortFlags(args []string, shortMap map[string]string) []string {
 
 type reviewOptions struct {
 	configPath     string
+	toolConfigPath string
+	rulePath       string
 	repoDir        string
 	from           string
 	to             string
@@ -117,6 +119,8 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	opts := reviewOptions{}
 
 	a.StringVar(&opts.configPath, "config", "argus.yaml", "path to YAML config file")
+	a.StringVar(&opts.toolConfigPath, "tools", "", "path to JSON tools config file (default: argus-tools.json)")
+	a.StringVar(&opts.rulePath, "rule", "", "path to JSON file with system review rules")
 	a.StringVar(&opts.repoDir, "repo", "", "root directory of the git repository (default: current dir)")
 	a.StringVar(&opts.from, "from", "", "source ref to start diff from (e.g., 'main')")
 	a.StringVar(&opts.to, "to", "", "target ref to end diff at (e.g., 'feature-branch')")
@@ -190,6 +194,7 @@ Flags:`)
 	fs := flag.NewFlagSet("print", flag.ContinueOnError)
 	var d reviewOptions
 	fs.StringVar(&d.configPath, "config", "argus.yaml", "path to YAML config file")
+	fs.StringVar(&d.rulePath, "rule", "", "path to JSON file with system review rules")
 	fs.StringVar(&d.repoDir, "repo", "", "root directory of the git repository (default: current dir)")
 	fs.StringVar(&d.from, "from", "", "source ref to start diff from (e.g., 'main')")
 	fs.StringVar(&d.to, "to", "", "target ref to end diff at (e.g., 'feature-branch')")

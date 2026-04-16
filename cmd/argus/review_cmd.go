@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,7 +11,6 @@ import (
 	"github.com/argus-review/argus/internal/config"
 	"github.com/argus-review/argus/internal/llm"
 	"github.com/argus-review/argus/internal/tool"
-	"gopkg.in/yaml.v3"
 )
 
 func runReview(args []string) error {
@@ -31,6 +31,21 @@ func runReview(args []string) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
+	var sysRule *config.SystemRule
+	if opts.rulePath != "" {
+		sysRule, err = loadSystemRule(opts.rulePath)
+		if err != nil {
+			return fmt.Errorf("load system rule: %w", err)
+		}
+	}
+
+	toolEntries, err := config.LoadTools(opts.toolConfigPath)
+	if err != nil {
+		return fmt.Errorf("load tools: %w", err)
+	}
+	planToolDefs := agent.BuildToolDefs(toolEntries, true)
+	mainToolDefs := agent.BuildToolDefs(toolEntries, false)
+
 	repoDir, err := resolveRepoDir(opts.repoDir)
 	if err != nil {
 		return fmt.Errorf("resolve repo: %w", err)
@@ -43,7 +58,8 @@ func runReview(args []string) error {
 		Timeout: opts.llmTimeout,
 	})
 
-	tools := buildToolRegistry()
+	collector := tool.NewCommentCollector()
+	tools := buildToolRegistry(collector)
 
 	ag := agent.New(agent.Args{
 		RepoDir:               repoDir,
@@ -51,8 +67,12 @@ func runReview(args []string) error {
 		To:                    opts.to,
 		Commit:                opts.commit,
 		Template:              *tpl,
+		SystemRule:            sysRule,
 		LLMClient:             llmClient,
 		Tools:                 tools,
+		PlanToolDefs:          planToolDefs,
+		MainToolDefs:          mainToolDefs,
+		CommentCollector:      collector,
 		MaxConcurrency:        opts.concurrency,
 		PerFileTimeoutMinutes: opts.perFileTimeout,
 		DryRun:                opts.dryRun,
@@ -75,15 +95,19 @@ func runReview(args []string) error {
 // These helpers are shared between subcommands.
 
 func loadTemplate(path string) (*config.Template, error) {
+	return config.LoadTemplate(path)
+}
+
+func loadSystemRule(path string) (*config.SystemRule, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config file %s: %w", path, err)
+		return nil, fmt.Errorf("read rule file %s: %w", path, err)
 	}
-	var tpl config.Template
-	if err := yaml.Unmarshal(data, &tpl); err != nil {
-		return nil, fmt.Errorf("unmarshal config: %w", err)
+	var rule config.SystemRule
+	if err := json.Unmarshal(data, &rule); err != nil {
+		return nil, fmt.Errorf("unmarshal rule file: %w", err)
 	}
-	return &tpl, nil
+	return &rule, nil
 }
 
 func resolveRepoDir(input string) (string, error) {
@@ -105,12 +129,13 @@ func resolveRepoDir(input string) (string, error) {
 	return absPath, nil
 }
 
-func buildToolRegistry() tool.Registry {
+func buildToolRegistry(collector *tool.CommentCollector) tool.Registry {
 	reg := tool.NewRegistry()
 	for _, t := range []tool.Tool{
 		tool.FileRead, tool.FileFind, tool.FileReadDiff, tool.FileSearch, tool.CodeSearch,
 	} {
 		reg.Register(tool.NewStub(t))
 	}
+	reg.Register(&tool.CodeCommentProvider{Collector: collector})
 	return reg
 }
