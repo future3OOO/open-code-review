@@ -51,11 +51,18 @@ func runReview(args []string) error {
 		return fmt.Errorf("resolve repo: %w", err)
 	}
 
+	cfg, err := LoadAppConfig(defaultConfigPath())
+	if err != nil {
+		return fmt.Errorf("load app config: %w", err)
+	}
+	if cfg == nil || cfg.Llm.BaseURL == "" || cfg.Llm.AuthToken == "" {
+		return fmt.Errorf("llm.base_url and llm.auth_token are required in $HOME/.argus/config.json")
+	}
+
 	llmClient := llm.NewClient(llm.ClientConfig{
-		BaseURL: opts.llmBaseURL,
-		APIKey:  opts.llmAPIKey,
-		Model:   opts.llmModel,
-		Timeout: opts.llmTimeout,
+		BaseURL: cfg.Llm.BaseURL,
+		APIKey:  cfg.Llm.AuthToken,
+		Model:   cfg.Llm.Model,
 	})
 
 	collector := tool.NewCommentCollector()

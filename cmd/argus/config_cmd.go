@@ -71,10 +71,10 @@ type Config struct {
 }
 
 type LlmConfig struct {
-	Provider string `json:"provider,omitempty"`
-	URL      string `json:"url,omitempty"`
-	Model    string `json:"model,omitempty"`
-	Key      string `json:"key,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	BaseURL   string `json:"base_url,omitempty"`
+	AuthToken string `json:"auth_token,omitempty"`
+	Model     string `json:"model,omitempty"`
 }
 
 func loadOrCreateConfig(path string) (*Config, error) {
@@ -92,18 +92,34 @@ func loadOrCreateConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// LoadAppConfig loads config from path. Returns nil, nil if file does not exist.
+func LoadAppConfig(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read app config %s: %w", path, err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse app config: %w", err)
+	}
+	return &cfg, nil
+}
+
 func setConfigValue(cfg *Config, key, value string) error {
 	switch key {
 	case "llm.provider", "llm.Provider":
 		cfg.Llm.Provider = value
-	case "llm.url", "llm.URL":
-		cfg.Llm.URL = value
+	case "llm.base_url", "llm.BaseURL":
+		cfg.Llm.BaseURL = value
+	case "llm.auth_token", "llm.AuthToken":
+		cfg.Llm.AuthToken = value
 	case "llm.model", "llm.Model":
 		cfg.Llm.Model = value
-	case "llm.key", "llm.Key":
-		cfg.Llm.Key = value
 	default:
-		return fmt.Errorf("unknown config key: %s\nSupported keys: llm.provider, llm.url, llm.model, llm.key", key)
+		return fmt.Errorf("unknown config key: %s\nSupported keys: llm.provider, llm.base_url, llm.auth_token, llm.model", key)
 	}
 	return nil
 }

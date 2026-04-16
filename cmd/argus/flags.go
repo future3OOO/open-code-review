@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"os"
 	"time"
 )
 
@@ -106,10 +105,6 @@ type reviewOptions struct {
 	dryRun         bool
 	concurrency    int
 	perFileTimeout int
-	llmBaseURL     string
-	llmAPIKey      string
-	llmModel       string
-	llmTimeout     time.Duration
 	showHelp       bool
 }
 
@@ -129,10 +124,6 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	a.BoolVar(&opts.dryRun, "dry-run", false, "run review without submitting comments (testing mode)")
 	a.IntVar(&opts.concurrency, "concurrency", 4, "max concurrent file reviews")
 	a.IntVar(&opts.perFileTimeout, "timeout", 10, "per-file timeout in minutes")
-	a.StringVar(&opts.llmBaseURL, "llm-url", os.Getenv("ARGUS_LLM_BASE_URL"), "LLM service base URL (OPENAI_COMPATIBLE)")
-	a.StringVar(&opts.llmAPIKey, "llm-api-key", os.Getenv("ARGUS_LLM_API_KEY"), "LLM API key")
-	a.StringVar(&opts.llmModel, "llm-model", os.Getenv("ARGUS_LLM_MODEL"), "LLM model name (overrides config template default)")
-	a.DurationVar(&opts.llmTimeout, "llm-timeout", 5*time.Minute, "LLM request timeout")
 
 	if err := a.Parse(args); err != nil {
 		return opts, fmt.Errorf("parse flags: %w", err)
@@ -141,13 +132,6 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	opts.showHelp = a.showHelp
 	if opts.showHelp {
 		return opts, nil
-	}
-
-	if opts.llmBaseURL == "" {
-		return opts, fmt.Errorf("--llm-url is required or set ARGUS_LLM_BASE_URL env var")
-	}
-	if opts.llmAPIKey == "" {
-		return opts, fmt.Errorf("--llm-api-key is required or set ARGUS_LLM_API_KEY env var")
 	}
 
 	modeCount := 0
@@ -190,7 +174,6 @@ Examples:
   argus review -f json
 
 Flags:`)
-	// Build a fresh flagset for printing defaults
 	fs := flag.NewFlagSet("print", flag.ContinueOnError)
 	var d reviewOptions
 	fs.StringVar(&d.configPath, "config", "argus.yaml", "path to YAML config file")
@@ -203,16 +186,7 @@ Flags:`)
 	fs.BoolVar(&d.dryRun, "dry-run", false, "run review without submitting comments (testing mode)")
 	fs.IntVar(&d.concurrency, "concurrency", 4, "max concurrent file reviews")
 	fs.IntVar(&d.perFileTimeout, "timeout", 10, "per-file timeout in minutes")
-	fs.StringVar(&d.llmBaseURL, "llm-url", "", "LLM service base URL (OPENAI_COMPATIBLE)")
-	fs.StringVar(&d.llmAPIKey, "llm-api-key", "", "LLM API key")
-	fs.StringVar(&d.llmModel, "llm-model", "", "LLM model name (overrides config template default)")
-	fs.DurationVar(&d.llmTimeout, "llm-timeout", 5*time.Minute, "LLM request timeout")
 	fs.PrintDefaults()
-	fmt.Println(`
-Environment Variables:
-  ARGUS_LLM_BASE_URL    LLM service base URL (OpenAI-compatible endpoint)
-  ARGUS_LLM_API_KEY     LLM API bearer token
-  ARGUS_LLM_MODEL       Default model name`)
 }
 
 // --- config subcommand ---
@@ -252,7 +226,9 @@ Usage:
 
 Examples:
   argus config set llm.provider idealab
-  argus config set llm.url https://xx/v1/openai/chat/completions
+  argus config set llm.base_url https://xx/v1/openai/chat/completions
+  argus config set llm.auth_token xxxxxxxxxx
   argus config set llm.model claude-opus-4-6
-  argus config set llm.key xxxxxxxxxx`)
+
+Supported keys: llm.provider, llm.base_url, llm.auth_token, llm.model`)
 }
