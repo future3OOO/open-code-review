@@ -264,6 +264,7 @@ type fillVars struct {
 	planGuide   string
 	changeFiles string
 	systemRule  string
+	planTools   string
 }
 
 // executeSubtask performs the Plan Phase + Main Loop for a single file.
@@ -324,6 +325,7 @@ func (a *Agent) fillMessages(msgs []template.ChatMessage, vars fillVars) []llm.M
 		content = strings.ReplaceAll(content, "{{change_files}}", vars.changeFiles)
 		content = strings.ReplaceAll(content, "{{plan_guidance}}", vars.planGuide)
 		content = strings.ReplaceAll(content, "{{diff}}", vars.diff)
+		content = strings.ReplaceAll(content, "{{plan_tools}}", vars.planTools)
 		result = append(result, llm.NewTextMessage(m.Role, content))
 	}
 	return result
@@ -366,6 +368,8 @@ func (a *Agent) resolveSystemRule(path string) string {
 }
 
 // executePlanPhase sends a request to the LLM to produce a structured review plan.
+// Tool descriptions are embedded as text in the system prompt rather than sent as API tools,
+// since the plan phase is single-round — this prevents the model from attempting real tool calls.
 func (a *Agent) executePlanPhase(_ context.Context, newPath, rawDiff, changeFiles, rule string) (string, error) {
 	pt := a.args.Template.PlanTask
 	messages := a.fillMessages(pt.Messages, fillVars{
@@ -374,14 +378,53 @@ func (a *Agent) executePlanPhase(_ context.Context, newPath, rawDiff, changeFile
 		planGuide:   "",
 		changeFiles: changeFiles,
 		systemRule:  rule,
+		planTools:   formatToolDefs(a.args.PlanToolDefs),
 	})
 
-	resp, err := a.args.LLMClient.GeneralRequest(messages, a.args.Model, a.args.PlanToolDefs)
+	resp, err := a.args.LLMClient.GeneralRequest(messages, a.args.Model, nil)
 	if err != nil {
 		return "", fmt.Errorf("plan request: %w", err)
 	}
 	fmt.Printf("[argus] Plan completed for %s\n", newPath)
 	return resp.Content(), nil
+}
+
+// formatToolDefs renders tool definitions as human-readable text for embedding in prompts.
+func formatToolDefs(toolDefs []llm.ToolDef) string {
+	if len(toolDefs) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("### Available Tools (reference only — do not call)\n")
+	for _, td := range toolDefs {
+		fn := &td.Function
+		sb.WriteString(fmt.Sprintf("- **%s**: %s\n", fn.Name, fn.Description))
+		if params, ok := fn.Parameters["properties"].(map[string]any); ok && len(params) > 0 {
+			sb.WriteString("  Parameters:\n")
+			required := make(map[string]bool)
+			if reqList, ok := fn.Parameters["required"].([]any); ok {
+				for _, r := range reqList {
+					if s, ok := r.(string); ok {
+						required[s] = true
+					}
+				}
+			}
+			for name, p := range params {
+				suffix := ""
+				if required[name] {
+					suffix = " (required)"
+				}
+				if pm, ok := p.(map[string]any); ok {
+					desc, _ := pm["description"].(string)
+					sb.WriteString(fmt.Sprintf("  - %s: %s%s\n", name, desc, suffix))
+				} else {
+					sb.WriteString(fmt.Sprintf("  - %s%s\n", name, suffix))
+				}
+			}
+		}
+	}
+	return sb.String()
 }
 
 // performLlmCodeReview runs the iterative tool-use loop until task_done, max iterations, or empty tool calls.
