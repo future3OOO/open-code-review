@@ -22,9 +22,10 @@ const maxRetries = 10 // Maximum number of retry attempts with exponential backo
 // or an array of content blocks (used by Claude for multi-part content).
 // ToolCallID is used by OpenAI-format APIs to identify which tool call this result responds to.
 type Message struct {
-	Role       string `json:"role"`
-	Content    any    `json:"content"`                // string or []ContentBlock
-	ToolCallID string `json:"tool_call_id,omitempty"` // OpenAI tool result identifier
+	Role       string     `json:"role"`
+	Content    any        `json:"content"`                // string or []ContentBlock
+	ToolCallID string     `json:"tool_call_id,omitempty"` // OpenAI tool result identifier
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // assistant tool invocations
 }
 
 // ContentBlock represents a single block within a multi-part message content.
@@ -39,6 +40,16 @@ type ContentBlock struct {
 // NewTextMessage creates a message with simple string content.
 func NewTextMessage(role, content string) Message {
 	return Message{Role: role, Content: content}
+}
+
+// NewToolCallMessage creates an assistant message with text content and tool invocations.
+func NewToolCallMessage(content string, toolCalls []ToolCall) Message {
+	var tc []ToolCall
+	if len(toolCalls) > 0 {
+		tc = make([]ToolCall, len(toolCalls))
+		copy(tc, toolCalls)
+	}
+	return Message{Role: "assistant", Content: content, ToolCalls: tc}
 }
 
 // NewToolResultMessage creates a tool-role message with the given result.

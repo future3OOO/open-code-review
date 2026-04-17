@@ -460,7 +460,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 			break
 		}
 
-		succeed := a.addNextMessage(content, results, &messages)
+		succeed := a.addNextMessage(content, calls, results, &messages)
 		if !succeed {
 			fmt.Printf("[argus] Context compression exceeded threshold for %s, stopping.\n", newPath)
 			break
@@ -534,15 +534,17 @@ func (a *Agent) collectPendingComments() []model.LlmComment {
 }
 
 // addNextMessage adds assistant + tool response messages to the conversation history.
-func (a *Agent) addNextMessage(assistantContent string, results []tool.ToolCallResult, messages *[]llm.Message) bool {
+func (a *Agent) addNextMessage(assistantContent string, toolCalls []llm.ToolCall, results []tool.ToolCallResult, messages *[]llm.Message) bool {
 	// Check if context compression is needed
 	tokenCount := countMessagesTokens(*messages)
 	if tokenCount > a.args.Template.TokenWarningThreshold {
 		*messages = compressMessages(*messages, a.args.Template.MemoryCompressionTask, a.args.LLMClient, a.args.Model)
 	}
 
-	// Add assistant message only when content is non-empty.
-	if assistantContent != "" {
+	// Add assistant message with tool_calls when present
+	if len(toolCalls) > 0 {
+		*messages = append(*messages, llm.NewToolCallMessage(assistantContent, toolCalls))
+	} else if assistantContent != "" {
 		*messages = append(*messages, llm.NewTextMessage("assistant", assistantContent))
 	}
 
