@@ -3,7 +3,6 @@ package tool
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 
 	"github.com/argus-review/argus/internal/model"
 )
@@ -20,47 +19,42 @@ func (p *CodeCommentProvider) Execute(args map[string]any) (string, error) {
 		return "Error: comment collector is not configured", nil
 	}
 
-	cm := model.LlmComment{}
-
-	if path, ok := args["path"].(string); ok {
-		cm.Path = path
-	}
-	if content, ok := args["content"].(string); ok {
-		cm.Content = content
-	}
-	if suggestion, ok := args["suggestion_code"].(string); ok {
-		cm.SuggestionCode = suggestion
-	}
-	if thinking, ok := args["thinking"].(string); ok {
-		cm.Thinking = thinking
-	}
-
-	if startLine, ok := args["start_line"]; ok {
-		switch v := startLine.(type) {
-		case float64:
-			cm.StartLine = int(v)
-		case string:
-			if n, err := strconv.Atoi(v); err == nil {
-				cm.StartLine = n
-			}
-		}
-	}
-	if endLine, ok := args["end_line"]; ok {
-		switch v := endLine.(type) {
-		case float64:
-			cm.EndLine = int(v)
-		case string:
-			if n, err := strconv.Atoi(v); err == nil {
-				cm.EndLine = n
-			}
-		}
-	}
-
-	if cm.Path == "" || cm.Content == "" {
+	// Parse the "comments" array from the tool call arguments.
+	rawComments, ok := args["comments"].([]any)
+	if !ok || len(rawComments) == 0 {
 		raw, _ := json.Marshal(args)
-		return fmt.Sprintf("Error: path and content are required. Got args: %s", string(raw)), nil
+		return fmt.Sprintf("Error: 'comments' array is required. Got args: %s", string(raw)), nil
 	}
 
-	p.Collector.Add(cm)
+	for _, raw := range rawComments {
+		obj, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		cm := model.LlmComment{}
+
+		if content, ok := obj["content"].(string); ok {
+			cm.Content = content
+		}
+		if suggestion, ok := obj["suggestion_code"].(string); ok {
+			cm.SuggestionCode = suggestion
+		}
+		if existing, ok := obj["existing_code"].(string); ok {
+			cm.ExistingCode = existing
+		}
+		if thinking, ok := obj["thinking"].(string); ok {
+			cm.Thinking = thinking
+		}
+		if path, ok := args["path"].(string); ok {
+			cm.Path = path
+		}
+
+		if cm.Path == "" || cm.Content == "" {
+			continue
+		}
+
+		p.Collector.Add(cm)
+	}
 	return CommentSucceed, nil
 }

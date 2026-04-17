@@ -5,6 +5,7 @@ type LlmComment struct {
 	Path           string `json:"path"`
 	Content        string `json:"content"`
 	SuggestionCode string `json:"suggestion_code,omitempty"`
+	ExistingCode   string `json:"existing_code,omitempty"`
 	StartLine      int    `json:"start_line"`
 	EndLine        int    `json:"end_line"`
 	Thinking       string `json:"thinking,omitempty"`
