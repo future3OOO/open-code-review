@@ -16,6 +16,7 @@ import (
 	"github.com/argus-review/argus/internal/diff"
 	"github.com/argus-review/argus/internal/llm"
 	"github.com/argus-review/argus/internal/model"
+	"github.com/argus-review/argus/internal/session"
 	"github.com/argus-review/argus/internal/tool"
 )
 
@@ -78,6 +79,10 @@ type Args struct {
 	// Model is the user-configured model name used as fallback when
 	// template phases (plan/memory_compression) don't specify one.
 	Model string
+
+	// Session is an optional session history instance for collecting conversation records.
+	// When nil, a default one is created automatically.
+	Session *session.SessionHistory
 }
 
 // Agent orchestrates the AI-powered code review.
@@ -88,6 +93,7 @@ type Agent struct {
 	totalInsertions int64
 	totalDeletions  int64
 	currentDate     string
+	session         *session.SessionHistory
 }
 
 // CommentWorkerPool manages a fixed-size pool of workers dedicated to
@@ -146,7 +152,13 @@ func New(args Args) *Agent {
 	if args.CommentCollector == nil {
 		args.CommentCollector = tool.NewCommentCollector()
 	}
-	return &Agent{args: args}
+	if args.Session == nil {
+		args.Session = session.New("", args.RepoDir)
+	}
+	return &Agent{
+		args:    args,
+		session: args.Session,
+	}
 }
 
 // Run executes the full review pipeline: parse diffs -> plan per file -> LLM tool-loop -> collect comments.
@@ -158,6 +170,7 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 
 	if len(a.diffs) == 0 {
 		fmt.Println("[argus] No files changed. Skipping review.")
+		a.session.Finalize()
 		return nil, nil
 	}
 
@@ -166,7 +179,14 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 	fmt.Printf("[argus] Reviewing %d file(s) in %s\n", len(a.diffs), a.args.RepoDir)
 
 	// Step 2: Dispatch per-file subtasks concurrently
-	return a.dispatchSubtasks(ctx)
+	comments, err := a.dispatchSubtasks(ctx)
+	a.session.Finalize()
+	return comments, err
+}
+
+// Session returns the session history associated with this Agent.
+func (a *Agent) Session() *session.SessionHistory {
+	return a.session
 }
 
 // loadDiffs populates the diff-related fields.
@@ -381,8 +401,14 @@ func (a *Agent) executePlanPhase(_ context.Context, newPath, rawDiff, changeFile
 		planTools:   formatToolDefs(a.args.PlanToolDefs),
 	})
 
+	fs := a.session.GetOrCreateFileSession(newPath)
+	rec := fs.AppendTaskRecord(session.PlanTask, messages)
+	startTime := time.Now()
+
 	resp, err := a.args.LLMClient.GeneralRequest(messages, a.args.Model, nil)
+	rec.SetResponse(resp, time.Since(startTime))
 	if err != nil {
+		rec.SetError(err, time.Since(startTime))
 		return "", fmt.Errorf("plan request: %w", err)
 	}
 	fmt.Printf("[argus] Plan completed for %s\n", newPath)
@@ -446,14 +472,20 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 
 		toolReqCount--
 
+		fs := a.session.GetOrCreateFileSession(newPath)
+		rec := fs.AppendTaskRecord(session.MainTask, append([]llm.Message(nil), messages...))
+		startTime := time.Now()
+
 		resp, err := a.args.LLMClient.Completions(llm.ChatRequest{
 			Model:    a.args.Model,
 			Messages: messages,
 			Tools:    a.args.MainToolDefs,
 		})
 		if err != nil {
+			rec.SetError(err, time.Since(startTime))
 			return a.collectPendingComments(), fmt.Errorf("LLM completion error: %w", err)
 		}
+		rec.SetResponse(resp, time.Since(startTime))
 
 		content := resp.Content()
 		calls := resp.ToolCalls()
@@ -473,7 +505,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		hasValidResult := false
 
 		for _, call := range calls {
-			cp := a.executeToolCall(ctx, newPath, call)
+			cp := a.executeToolCall(ctx, newPath, call, rec)
 			if cp.Completed {
 				results = append(results, tool.ToolCallResult{
 					ToolCallID: call.ID,
@@ -505,7 +537,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 			break
 		}
 
-		succeed := a.addNextMessage(content, calls, results, &messages)
+		succeed := a.addNextMessage(content, calls, results, &messages, newPath)
 		if !succeed {
 			fmt.Printf("[argus] Context compression exceeded threshold for %s, stopping.\n", newPath)
 			break
@@ -520,6 +552,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 }
 
 // executeToolCall handles a single tool call from the LLM.
+// The optional rec parameter records the tool execution in the session history.
 //
 // For the CODE_COMMENT tool this mirrors the Java branch at CodeReviewNativeAgent L640-642:
 //
@@ -529,7 +562,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 //   }
 //
 // All other tools execute synchronously on the calling goroutine.
-func (a *Agent) executeToolCall(_ context.Context, _ string, call llm.ToolCall) tool.TaskCheckpoint {
+func (a *Agent) executeToolCall(_ context.Context, _ string, call llm.ToolCall, rec *session.TaskRecord) tool.TaskCheckpoint {
 	t := tool.OfName(call.Function.Name)
 	if !t.IsKnown() {
 		return tool.Of(tool.NotAvailableMsg)
@@ -552,6 +585,9 @@ func (a *Agent) executeToolCall(_ context.Context, _ string, call llm.ToolCall) 
 	// Async path for code_comment when worker pool is configured
 	// Mirrors Java: pendingCommentFutures.add(subtaskExecutor.submit(() -> getCodeComments(...)))
 	if t == tool.CodeComment && a.args.CommentWorkerPool != nil {
+		if rec != nil {
+			rec.AddToolResult(t.Name(), call.Function.Arguments, "(async)")
+		}
 		pool := a.args.CommentWorkerPool
 		pool.Submit(func() ([]model.LlmComment, error) {
 			_, _ = p.Execute(args) // provider parses args and adds to collector
@@ -567,6 +603,9 @@ func (a *Agent) executeToolCall(_ context.Context, _ string, call llm.ToolCall) 
 	if err != nil {
 		return tool.Of(fmt.Sprintf("Error executing tool %s: %v", t.Name(), err))
 	}
+	if rec != nil {
+		rec.AddToolResult(t.Name(), call.Function.Arguments, result)
+	}
 	return tool.Of(result)
 }
 
@@ -579,11 +618,11 @@ func (a *Agent) collectPendingComments() []model.LlmComment {
 }
 
 // addNextMessage adds assistant + tool response messages to the conversation history.
-func (a *Agent) addNextMessage(assistantContent string, toolCalls []llm.ToolCall, results []tool.ToolCallResult, messages *[]llm.Message) bool {
+func (a *Agent) addNextMessage(assistantContent string, toolCalls []llm.ToolCall, results []tool.ToolCallResult, messages *[]llm.Message, filePath string) bool {
 	// Check if context compression is needed
 	tokenCount := countMessagesTokens(*messages)
 	if tokenCount > a.args.Template.TokenWarningThreshold {
-		*messages = compressMessages(*messages, a.args.Template.MemoryCompressionTask, a.args.LLMClient, a.args.Model)
+		*messages = a.compressAndRecord(*messages, filePath)
 	}
 
 	// Add assistant message with tool_calls when present
@@ -629,6 +668,45 @@ func BuildToolDefs(entries []toolsconfig.ToolConfigEntry, planOnly bool) []llm.T
 		})
 	}
 	return defs
+}
+
+// compressAndRecord runs memory compression and records it in session history.
+func (a *Agent) compressAndRecord(msgs []llm.Message, filePath string) []llm.Message {
+	if len(a.args.Template.MemoryCompressionTask.Messages) == 0 || len(msgs) <= 2 {
+		return msgs[:min(len(msgs), 2)]
+	}
+
+	contextXML := buildMessageXML(msgs[2:])
+	compressionMsgs := make([]llm.Message, 0, len(a.args.Template.MemoryCompressionTask.Messages))
+	for _, m := range a.args.Template.MemoryCompressionTask.Messages {
+		content := strings.ReplaceAll(m.Content, "{{context}}", contextXML)
+		compressionMsgs = append(compressionMsgs, llm.NewTextMessage(m.Role, content))
+	}
+
+	startTime := time.Now()
+	resp, err := a.args.LLMClient.GeneralRequest(compressionMsgs, a.args.Model, nil)
+	duration := time.Since(startTime)
+
+	fs := a.session.GetOrCreateFileSession(filePath)
+	rec := fs.AppendTaskRecord(session.MemoryCompressionTask, compressionMsgs)
+	if err != nil {
+		rec.SetError(err, duration)
+		fmt.Printf("[argus] Memory compression failed: %v\n", err)
+		return msgs[:2]
+	}
+	rec.SetResponse(resp, duration)
+
+	summary := resp.Content()
+	if summary == "" {
+		return msgs[:2]
+	}
+
+	compressed := msgs[:2]
+	// Append summary to the original user prompt
+	userMsg := compressed[1]
+	currentText := userMsg.ExtractText()
+	compressed[1] = llm.NewTextMessage(userMsg.Role, currentText+"\n\n"+summary)
+	return compressed
 }
 
 // compressMessages runs the memory compression task and replaces old messages with a summary.
