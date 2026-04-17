@@ -6,8 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 // SystemRule holds review rules loaded from an external JSON config.
@@ -44,11 +45,12 @@ func LoadFile(path string) (*SystemRule, error) {
 // Resolve returns the rule text for a given file path.
 // Patterns with brace expansion like "*.{go,py}" are expanded into "*.go", "*.py".
 // The first match wins; if none match, it falls back to DefaultRule.
+// Supports full glob syntax including ** for recursive directory matching.
 func (r *SystemRule) Resolve(path string) string {
 	for pattern, rule := range r.PathRuleMap {
 		expanded := expandBraces(pattern)
 		for _, p := range expanded {
-			if matched, _ := filepath.Match(p, path); matched {
+			if matched, _ := doublestar.Match(p, path); matched {
 				return rule
 			}
 		}

@@ -284,7 +284,7 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) ([]model.LlmCo
 	// Build change-files list excluding current file
 	changeFilesExcludingCurrent := a.buildChangeFilesExcept(newPath)
 
-	rule := a.resolveSystemRule(newPath)
+	rule := a.resolveSystemRule(strings.ToLower(newPath))
 
 	// Phase 1: Plan
 	var planResult string
