@@ -2,15 +2,15 @@ package tool
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
 // FileSearchProvider searches for text patterns within a file (grep-like).
 type FileSearchProvider struct {
-	RepoDir string
+	FileReader *FileReader
 }
+
+func NewFileSearch(fr *FileReader) *FileSearchProvider { return &FileSearchProvider{FileReader: fr} }
 
 func (p *FileSearchProvider) Tool() Tool { return FileSearch }
 
@@ -26,18 +26,16 @@ func (p *FileSearchProvider) Execute(args map[string]any) (string, error) {
 		return "Error: path is blank", nil
 	}
 
-	fullPath := filepath.Join(p.RepoDir, path)
-	content, err := os.ReadFile(fullPath)
+	content, err := p.FileReader.Read(path)
 	if err != nil {
 		return fmt.Sprintf("Error: file %q not found: %v", path, err), nil
 	}
 
-	fileContent := string(content)
-	if strings.TrimSpace(fileContent) == "" {
+	if strings.TrimSpace(content) == "" {
 		return "Error: file content is empty", nil
 	}
 
-	lines := strings.Split(fileContent, "\n")
+	lines := strings.Split(content, "\n")
 	var sb strings.Builder
 	matchCount := 0
 

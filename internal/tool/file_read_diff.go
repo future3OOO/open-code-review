@@ -9,6 +9,8 @@ type FileReadDiffProvider struct {
 	DiffMap map[string]string // path -> diff text, same as Agent's internal diffMap
 }
 
+func NewFileReadDiff() *FileReadDiffProvider { return &FileReadDiffProvider{DiffMap: make(map[string]string)} }
+
 func (p *FileReadDiffProvider) Tool() Tool { return FileReadDiff }
 
 func (p *FileReadDiffProvider) Execute(args map[string]any) (string, error) {

@@ -47,8 +47,10 @@ var ignoredIncludePatterns = []string{
 
 // FileFindProvider finds files by name or pattern in the repository.
 type FileFindProvider struct {
-	RepoDir string
+	FileReader *FileReader
 }
+
+func NewFileFind(fr *FileReader) *FileFindProvider { return &FileFindProvider{FileReader: fr} }
 
 func (p *FileFindProvider) Tool() Tool { return FileFind }
 
@@ -61,11 +63,11 @@ func (p *FileFindProvider) Execute(args map[string]any) (string, error) {
 	caseSensitive, _ := args["case_sensitive"].(bool)
 
 	var matched []string
-	err := filepath.Walk(p.RepoDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(p.FileReader.RepoDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
-		relPath, _ := filepath.Rel(p.RepoDir, path)
+		relPath, _ := filepath.Rel(p.FileReader.RepoDir, path)
 		if isIgnored(relPath) {
 			return nil
 		}

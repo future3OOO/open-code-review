@@ -102,7 +102,6 @@ type reviewOptions struct {
 	to             string
 	commit         string
 	outputFormat   string
-	dryRun         bool
 	concurrency    int
 	perFileTimeout int
 	showHelp       bool
@@ -121,7 +120,6 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	a.StringVar(&opts.to, "to", "", "target ref to end diff at (e.g., 'feature-branch')")
 	a.StringVarP(&opts.commit, "commit", "c", "", "single commit hash or tag to review (vs its parent)")
 	a.StringVarP(&opts.outputFormat, "format", "f", "text", "output format: text or json")
-	a.BoolVar(&opts.dryRun, "dry-run", false, "run review without submitting comments (testing mode)")
 	a.IntVar(&opts.concurrency, "concurrency", 4, "max concurrent file reviews")
 	a.IntVar(&opts.perFileTimeout, "timeout", 10, "per-file timeout in minutes")
 
@@ -141,9 +139,7 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	if opts.commit != "" {
 		modeCount++
 	}
-	if modeCount == 0 {
-		return opts, fmt.Errorf("either --from/--to or --commit is required")
-	}
+	// modeCount == 0 → workspace mode (no error, allowed)
 	if modeCount > 1 {
 		return opts, fmt.Errorf("only one review mode allowed (--from/--to or --commit)")
 	}
@@ -162,7 +158,10 @@ Usage:
   argus r [flags]              (alias)
 
 Examples:
-  # Review a branch against its base
+  # Review staged + unstaged + untracked changes in current workspace
+  argus review
+
+  # Review a branch against its base (merge-base mode)
   argus review --from master --to dev-ref
 
   # Review a specific commit
@@ -182,8 +181,6 @@ Flags:`)
 	fs.StringVar(&d.from, "from", "", "source ref to start diff from (e.g., 'main')")
 	fs.StringVar(&d.to, "to", "", "target ref to end diff at (e.g., 'feature-branch')")
 	fs.StringVar(&d.commit, "commit", "", "single commit hash or tag to review (vs its parent) (shorthand: -c)")
-	fs.StringVar(&d.outputFormat, "format", "text", "output format: text or json (shorthand: -f)")
-	fs.BoolVar(&d.dryRun, "dry-run", false, "run review without submitting comments (testing mode)")
 	fs.IntVar(&d.concurrency, "concurrency", 4, "max concurrent file reviews")
 	fs.IntVar(&d.perFileTimeout, "timeout", 10, "per-file timeout in minutes")
 	fs.PrintDefaults()

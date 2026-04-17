@@ -66,13 +66,22 @@ func runReview(args []string) error {
 	})
 
 	collector := tool.NewCommentCollector()
-	tools := buildToolRegistry(collector)
+	mode := tool.ParseReviewMode(opts.from, opts.to, opts.commit)
+	ref, _ := mode.RefValue(opts.to, opts.commit)
+	diffMap := make(map[string]string)
+	fileReader := &tool.FileReader{
+		RepoDir: repoDir,
+		Mode:    mode,
+		Ref:     ref,
+	}
+	tools := buildToolRegistry(collector, fileReader, diffMap)
 
 	ag := agent.New(agent.Args{
 		RepoDir:               repoDir,
 		From:                  opts.from,
 		To:                    opts.to,
 		Commit:                opts.commit,
+		DiffMap:               diffMap,
 		Template:              *tpl,
 		SystemRule:            sysRule,
 		LLMClient:             llmClient,
@@ -82,7 +91,6 @@ func runReview(args []string) error {
 		CommentCollector:      collector,
 		MaxConcurrency:        opts.concurrency,
 		PerFileTimeoutMinutes: opts.perFileTimeout,
-		DryRun:                opts.dryRun,
 	})
 
 	ctx := context.Background()
@@ -136,13 +144,19 @@ func resolveRepoDir(input string) (string, error) {
 	return absPath, nil
 }
 
-func buildToolRegistry(collector *tool.CommentCollector) tool.Registry {
+func buildToolRegistry(collector *tool.CommentCollector, fr *tool.FileReader, diffMap map[string]string) tool.Registry {
 	reg := tool.NewRegistry()
-	for _, t := range []tool.Tool{
-		tool.FileRead, tool.FileFind, tool.FileReadDiff, tool.FileSearch, tool.CodeSearch,
-	} {
-		reg.Register(tool.NewStub(t))
-	}
+	reg.Register(tool.NewFileRead(fr))
+	reg.Register(tool.NewFileFind(fr))
+	reg.Register(tool.NewFileReadDiff())
+	reg.Register(tool.NewFileSearch(fr))
+	reg.Register(tool.NewCodeSearch(fr))
 	reg.Register(&tool.CodeCommentProvider{Collector: collector})
+
+	// Wire up FileReadDiffProvider with shared diffMap pointer so Agent's loadDiffs populates it.
+	if p, ok := reg[tool.FileReadDiff.Name()].(*tool.FileReadDiffProvider); ok {
+		p.DiffMap = diffMap
+	}
+
 	return reg
 }

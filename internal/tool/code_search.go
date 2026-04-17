@@ -11,8 +11,10 @@ const gitGrepMaxCount = 100
 
 // CodeSearchProvider performs text search across the repository using git grep.
 type CodeSearchProvider struct {
-	RepoDir string
+	FileReader *FileReader
 }
+
+func NewCodeSearch(fr *FileReader) *CodeSearchProvider { return &CodeSearchProvider{FileReader: fr} }
 
 func (p *CodeSearchProvider) Tool() Tool { return CodeSearch }
 
@@ -54,11 +56,17 @@ func (p *CodeSearchProvider) gitGrep(searchText string, caseSensitive bool, useP
 
 	cmdArgs = append(cmdArgs, "-n", "--no-color")
 	cmdArgs = append(cmdArgs, "--max-count", fmt.Sprintf("%d", gitGrepMaxCount))
+
+	// In range/commit mode, specify the ref so git grep searches at that ref instead of working tree.
+	if ref := p.FileReader.Ref; ref != "" {
+		cmdArgs = append(cmdArgs, ref)
+	}
+
 	cmdArgs = append(cmdArgs, "--", searchText)
 	cmdArgs = append(cmdArgs, pathspec...)
 
 	cmd := exec.Command("git", cmdArgs...)
-	cmd.Dir = p.RepoDir
+	cmd.Dir = p.FileReader.RepoDir
 
 	output, err := cmd.CombinedOutput()
 	outStr := string(output)

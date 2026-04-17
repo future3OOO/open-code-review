@@ -2,15 +2,15 @@ package tool
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
 // FileReadProvider reads file content at a given path and optional line range.
 type FileReadProvider struct {
-	RepoDir string
+	FileReader *FileReader
 }
+
+func NewFileRead(fr *FileReader) *FileReadProvider { return &FileReadProvider{FileReader: fr} }
 
 func (p *FileReadProvider) Tool() Tool { return FileRead }
 
@@ -29,13 +29,12 @@ func (p *FileReadProvider) Execute(args map[string]any) (string, error) {
 		endLine = 200
 	}
 
-	fullPath := filepath.Join(p.RepoDir, path)
-	content, err := os.ReadFile(fullPath)
+	content, err := p.FileReader.Read(path)
 	if err != nil {
 		return fmt.Sprintf("Error: file %q not found: %v", path, err), nil
 	}
 
-	lines := strings.Split(string(content), "\n")
+	lines := strings.Split(content, "\n")
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("File: %s (lines %.0f-%.0f)\n", path, startLine, endLine))
 
