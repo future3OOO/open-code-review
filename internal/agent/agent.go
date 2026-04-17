@@ -10,7 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/argus-review/argus/internal/config"
+	"github.com/argus-review/argus/internal/config/rules"
+	"github.com/argus-review/argus/internal/config/template"
+	"github.com/argus-review/argus/internal/config/toolsconfig"
 	"github.com/argus-review/argus/internal/diff"
 	"github.com/argus-review/argus/internal/llm"
 	"github.com/argus-review/argus/internal/model"
@@ -30,10 +32,10 @@ type Args struct {
 	Commit string
 
 	// Template loaded from YAML config file.
-	Template config.Template
+	Template template.Template
 
 	// SystemRule holds path-based review rules loaded from a JSON config.
-	SystemRule *config.SystemRule
+	SystemRule *rules.SystemRule
 
 	// LLM client for model inference.
 	LLMClient *llm.Client
@@ -312,7 +314,7 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) ([]model.LlmCo
 }
 
 // fillMessages replaces template variables in messages.
-func (a *Agent) fillMessages(msgs []config.ChatMessage, vars fillVars) []llm.Message {
+func (a *Agent) fillMessages(msgs []template.ChatMessage, vars fillVars) []llm.Message {
 	result := make([]llm.Message, 0, len(msgs))
 	for _, m := range msgs {
 		content := m.Content
@@ -564,9 +566,9 @@ func countMessagesTokens(msgs []llm.Message) int {
 	return total
 }
 
-// BuildToolDefs converts config.ToolConfigEntry slice into []llm.ToolDef,
+// BuildToolDefs converts toolsconfig.ToolConfigEntry slice into []llm.ToolDef,
 // filtering by phase (planOnly=true for plan_task, false for main_task).
-func BuildToolDefs(entries []config.ToolConfigEntry, planOnly bool) []llm.ToolDef {
+func BuildToolDefs(entries []toolsconfig.ToolConfigEntry, planOnly bool) []llm.ToolDef {
 	var defs []llm.ToolDef
 	for _, e := range entries {
 		defRaw, ok := e.ToolDefsByPhase(planOnly)
@@ -587,7 +589,7 @@ func BuildToolDefs(entries []config.ToolConfigEntry, planOnly bool) []llm.ToolDe
 }
 
 // compressMessages runs the memory compression task and replaces old messages with a summary.
-func compressMessages(msgs []llm.Message, compTask config.LlmConversation, client *llm.Client, model string) []llm.Message {
+func compressMessages(msgs []llm.Message, compTask template.LlmConversation, client *llm.Client, model string) []llm.Message {
 	if len(compTask.Messages) == 0 || len(msgs) <= 2 {
 		return msgs[:min(len(msgs), 2)]
 	}

@@ -2,13 +2,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/argus-review/argus/internal/agent"
-	"github.com/argus-review/argus/internal/config"
+	"github.com/argus-review/argus/internal/config/rules"
+	"github.com/argus-review/argus/internal/config/template"
+	"github.com/argus-review/argus/internal/config/toolsconfig"
 	"github.com/argus-review/argus/internal/llm"
 	"github.com/argus-review/argus/internal/tool"
 )
@@ -23,7 +24,7 @@ func runReview(args []string) error {
 		return nil
 	}
 
-	tpl, err := config.LoadTemplate()
+	tpl, err := template.LoadDefault()
 	if err != nil {
 		return fmt.Errorf("load default template: %w", err)
 	}
@@ -31,7 +32,7 @@ func runReview(args []string) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	sysRule, err := config.LoadDefaultSystemRule()
+	sysRule, err := rules.LoadDefault()
 	if err != nil {
 		return fmt.Errorf("load default system rule: %w", err)
 	}
@@ -42,7 +43,7 @@ func runReview(args []string) error {
 		}
 	}
 
-	toolEntries, err := config.LoadTools(opts.toolConfigPath)
+	toolEntries, err := toolsconfig.Load(opts.toolConfigPath)
 	if err != nil {
 		return fmt.Errorf("load tools: %w", err)
 	}
@@ -111,16 +112,8 @@ func runReview(args []string) error {
 	return nil
 }
 
-func loadSystemRule(path string) (*config.SystemRule, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read rule file %s: %w", path, err)
-	}
-	var rule config.SystemRule
-	if err := json.Unmarshal(data, &rule); err != nil {
-		return nil, fmt.Errorf("unmarshal rule file: %w", err)
-	}
-	return &rule, nil
+func loadSystemRule(path string) (*rules.SystemRule, error) {
+	return rules.LoadFile(path)
 }
 
 func resolveRepoDir(input string) (string, error) {
