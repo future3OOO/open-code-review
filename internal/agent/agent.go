@@ -88,8 +88,7 @@ type Args struct {
 // Agent orchestrates the AI-powered code review.
 type Agent struct {
 	args            Args
-	diffMap         map[string]string // path -> diff text
-	diffs           []model.Diff      // parsed diffs
+	diffs           []model.Diff // parsed diffs
 	totalInsertions int64
 	totalDeletions  int64
 	currentDate     string
@@ -128,7 +127,7 @@ func (p *CommentWorkerPool) Submit(f func() ([]model.LlmComment, error)) {
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		p.semaphore <- struct{}{}       // acquire
+		p.semaphore <- struct{}{}        // acquire
 		defer func() { <-p.semaphore }() // release
 
 		comments, _ := f() // errors are logged; results are merged below
@@ -207,16 +206,12 @@ func (a *Agent) loadDiffs() error {
 		return fmt.Errorf("get diffs: %w", err)
 	}
 
-	a.diffMap = make(map[string]string)
 	a.diffs = parsed
 
 	for i := range parsed {
 		d := &parsed[i]
-		if d.NewPath != "/dev/null" {
-			a.diffMap[d.NewPath] = d.Diff
-			if a.args.DiffMap != nil {
-				a.args.DiffMap[d.NewPath] = d.Diff
-			}
+		if d.NewPath != "/dev/null" && a.args.DiffMap != nil {
+			a.args.DiffMap[d.NewPath] = d.Diff
 		}
 		a.totalInsertions += d.Insertions
 		a.totalDeletions += d.Deletions
@@ -278,15 +273,6 @@ func (a *Agent) dispatchSubtasks(ctx context.Context) ([]model.LlmComment, error
 	return allComments, nil
 }
 
-type fillVars struct {
-	path        string
-	diff        string
-	planGuide   string
-	changeFiles string
-	systemRule  string
-	planTools   string
-}
-
 // executeSubtask performs the Plan Phase + Main Loop for a single file.
 func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) ([]model.LlmComment, error) {
 	if ctx.Err() != nil {
@@ -316,13 +302,18 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) ([]model.LlmCo
 		return nil, fmt.Errorf("main_task.messages is empty in template")
 	}
 
-	messages := a.fillMessages(a.args.Template.MainTask.Messages, fillVars{
-		path:        newPath,
-		diff:        d.Diff,
-		planGuide:   planResult,
-		changeFiles: changeFilesExcludingCurrent,
-		systemRule:  rule,
-	})
+	rawMsgs := a.args.Template.MainTask.Messages
+	messages := make([]llm.Message, 0, len(rawMsgs))
+	for _, m := range rawMsgs {
+		content := m.Content
+		content = strings.ReplaceAll(content, "{{current_system_date_time}}", a.currentDate)
+		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
+		content = strings.ReplaceAll(content, "{{system_rule}}", rule)
+		content = strings.ReplaceAll(content, "{{change_files}}", changeFilesExcludingCurrent)
+		content = strings.ReplaceAll(content, "{{plan_guidance}}", planResult)
+		content = strings.ReplaceAll(content, "{{diff}}", d.Diff)
+		messages = append(messages, llm.NewTextMessage(m.Role, content))
+	}
 
 	tokenCount := countMessagesTokens(messages)
 	if tokenCount > a.args.Template.TokenWarningThreshold {
@@ -332,23 +323,6 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) ([]model.LlmCo
 	}
 
 	return a.performLlmCodeReview(ctx, messages, newPath)
-}
-
-// fillMessages replaces template variables in messages.
-func (a *Agent) fillMessages(msgs []template.ChatMessage, vars fillVars) []llm.Message {
-	result := make([]llm.Message, 0, len(msgs))
-	for _, m := range msgs {
-		content := m.Content
-		content = strings.ReplaceAll(content, "{{current_system_date_time}}", a.currentDate)
-		content = strings.ReplaceAll(content, "{{current_file_path}}", vars.path)
-		content = strings.ReplaceAll(content, "{{system_rule}}", vars.systemRule)
-		content = strings.ReplaceAll(content, "{{change_files}}", vars.changeFiles)
-		content = strings.ReplaceAll(content, "{{plan_guidance}}", vars.planGuide)
-		content = strings.ReplaceAll(content, "{{diff}}", vars.diff)
-		content = strings.ReplaceAll(content, "{{plan_tools}}", vars.planTools)
-		result = append(result, llm.NewTextMessage(m.Role, content))
-	}
-	return result
 }
 
 // buildChangeFilesExcept returns a formatted list of changed files except the given path.
@@ -392,14 +366,17 @@ func (a *Agent) resolveSystemRule(path string) string {
 // since the plan phase is single-round — this prevents the model from attempting real tool calls.
 func (a *Agent) executePlanPhase(_ context.Context, newPath, rawDiff, changeFiles, rule string) (string, error) {
 	pt := a.args.Template.PlanTask
-	messages := a.fillMessages(pt.Messages, fillVars{
-		path:        newPath,
-		diff:        rawDiff,
-		planGuide:   "",
-		changeFiles: changeFiles,
-		systemRule:  rule,
-		planTools:   formatToolDefs(a.args.PlanToolDefs),
-	})
+	messages := make([]llm.Message, 0, len(pt.Messages))
+	for _, m := range pt.Messages {
+		content := m.Content
+		content = strings.ReplaceAll(content, "{{current_system_date_time}}", a.currentDate)
+		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
+		content = strings.ReplaceAll(content, "{{system_rule}}", rule)
+		content = strings.ReplaceAll(content, "{{change_files}}", changeFiles)
+		content = strings.ReplaceAll(content, "{{diff}}", rawDiff)
+		content = strings.ReplaceAll(content, "{{plan_tools}}", formatToolDefs(a.args.PlanToolDefs))
+		messages = append(messages, llm.NewTextMessage(m.Role, content))
+	}
 
 	fs := a.session.GetOrCreateFileSession(newPath)
 	rec := fs.AppendTaskRecord(session.PlanTask, messages)
@@ -556,10 +533,10 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 //
 // For the CODE_COMMENT tool this mirrors the Java branch at CodeReviewNativeAgent L640-642:
 //
-//   if (tool == Tool.CODE_COMMENT) {
-//       pendingCommentFutures.add(subtaskExecutor.submit(() -> getCodeComments(...)));
-//       return COMMENT_SUCCEED;  // non-blocking
-//   }
+//	if (tool == Tool.CODE_COMMENT) {
+//	    pendingCommentFutures.add(subtaskExecutor.submit(() -> getCodeComments(...)));
+//	    return COMMENT_SUCCEED;  // non-blocking
+//	}
 //
 // All other tools execute synchronously on the calling goroutine.
 func (a *Agent) executeToolCall(_ context.Context, _ string, call llm.ToolCall, rec *session.TaskRecord) tool.TaskCheckpoint {
@@ -763,12 +740,4 @@ func min(a, b int) int {
 	return b
 }
 
-// firstNonEmpty returns the first non-empty string from the arguments.
-func firstNonEmpty(ss ...string) string {
-	for _, s := range ss {
-		if s != "" {
-			return s
-		}
-	}
-	return ""
-}
+
