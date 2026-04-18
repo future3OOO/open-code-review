@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+const fileReadMaxLines = 500
+
 // FileReadProvider reads file content at a given path and optional line range.
 type FileReadProvider struct {
 	FileReader *FileReader
@@ -15,40 +17,57 @@ func NewFileRead(fr *FileReader) *FileReadProvider { return &FileReadProvider{Fi
 func (p *FileReadProvider) Tool() Tool { return FileRead }
 
 func (p *FileReadProvider) Execute(args map[string]any) (string, error) {
-	path, _ := args["path"].(string)
-	if path == "" {
-		return "Error: path is required", nil
+	filePath, _ := args["file_path"].(string)
+	if filePath == "" {
+		return "Error: file_path is required", nil
 	}
 
-	startLine, _ := args["start_line"].(float64)
-	endLine, _ := args["end_line"].(float64)
-	if startLine <= 0 {
+	startLine, hasStart := args["start_line"].(float64)
+	endLine, hasEnd := args["end_line"].(float64)
+	if !hasStart || startLine <= 0 {
 		startLine = 1
 	}
-	if endLine <= 0 {
-		endLine = 200
+	if !hasEnd || endLine <= 0 {
+		endLine = 0 // means "to end of file"
 	}
 
-	content, err := p.FileReader.Read(path)
+	content, err := p.FileReader.Read(filePath)
 	if err != nil {
-		return fmt.Sprintf("Error: file %q not found: %v", path, err), nil
+		return fmt.Sprintf("Error: file %q not found: %v", filePath, err), nil
 	}
 
 	lines := strings.Split(content, "\n")
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("File: %s (lines %.0f-%.0f)\n", path, startLine, endLine))
+	totalLines := len(lines)
+
+	// Adjust endLine: if not specified or beyond file length, clamp to file length.
+	actualEnd := int(endLine)
+	if actualEnd <= 0 || actualEnd > totalLines {
+		actualEnd = totalLines
+	}
 
 	start := int(startLine) - 1
-	end := int(endLine)
-	if start >= len(lines) {
-		return fmt.Sprintf("Error: file %q has only %d lines, requested range %d-%d", path, len(lines), int(startLine), int(endLine)), nil
-	}
-	if end > len(lines) {
-		end = len(lines)
+	if start >= totalLines {
+		return fmt.Sprintf("Error: file %q has only %d lines, requested range %d-%d", filePath, totalLines, int(startLine), int(endLine)), nil
 	}
 
-	for i := start; i < end; i++ {
+	// Apply 500-line cap and track truncation.
+	truncated := false
+	requestedCount := actualEnd - start
+	if requestedCount > fileReadMaxLines {
+		actualEnd = start + fileReadMaxLines
+		truncated = true
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("File: %s (Total lines: %d)\n", filePath, totalLines))
+	sb.WriteString(fmt.Sprintf("IS_TRUNCATED: %t\n", truncated))
+	sb.WriteString(fmt.Sprintf("LINE_RANGE: %d-%d\n", int(startLine), actualEnd))
+	// The following is the original content of the file.
+	for i := start; i < actualEnd; i++ {
 		sb.WriteString(fmt.Sprintf("%d|%s\n", i+1, lines[i]))
+	}
+	if truncated {
+		sb.WriteString(fmt.Sprintf("\nNote: Results truncated to %d lines. Please narrow your line range.\n", fileReadMaxLines))
 	}
 	return sb.String(), nil
 }
