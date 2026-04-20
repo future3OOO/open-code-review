@@ -63,6 +63,7 @@ func runReview(args []string) error {
 		return fmt.Errorf("llm.url and llm.auth_token are required in $HOME/.argus/config.json")
 	}
 	model := cfg.Llm.Model
+	tpl.ApplyLanguage(cfg.Language)
 	llmClient := llm.NewClient(llm.ClientConfig{
 		URL:     cfg.Llm.URL,
 		APIKey:  cfg.Llm.AuthToken,

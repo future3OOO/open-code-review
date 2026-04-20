@@ -67,7 +67,8 @@ func runConfigSet(key, value string) error {
 
 // Config represents the user-level configuration file (~/.argus/config.json).
 type Config struct {
-	Llm LlmConfig `json:"llm,omitempty"`
+	Llm      LlmConfig `json:"llm,omitempty"`
+	Language string    `json:"language,omitempty"` // Output language, defaults to Chinese when empty
 }
 
 type LlmConfig struct {
@@ -118,8 +119,10 @@ func setConfigValue(cfg *Config, key, value string) error {
 		cfg.Llm.AuthToken = value
 	case "llm.model", "llm.Model":
 		cfg.Llm.Model = value
+	case "language", "Language":
+		cfg.Language = value
 	default:
-		return fmt.Errorf("unknown config key: %s\nSupported keys: llm.provider, llm.url, llm.auth_token, llm.model", key)
+		return fmt.Errorf("unknown config key: %s\nSupported keys: llm.provider, llm.url, llm.auth_token, llm.model, language", key)
 	}
 	return nil
 }

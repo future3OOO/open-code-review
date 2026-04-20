@@ -35,3 +35,20 @@ func LoadDefault() (*LlmConversation, error) {
 	}
 	return &tasks.TestTask, nil
 }
+
+func resolveLang(lang string) string {
+	if lang == "" {
+		return "Chinese"
+	}
+	return lang
+}
+
+// ApplyLanguage injects a language directive into all system-role messages of this conversation.
+func (c *LlmConversation) ApplyLanguage(lang string) {
+	instruction := "\n\nAlways respond in " + resolveLang(lang) + "."
+	for i := range c.Messages {
+		if c.Messages[i].Role == "system" {
+			c.Messages[i].Content += instruction
+		}
+	}
+}

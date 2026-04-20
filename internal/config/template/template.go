@@ -32,7 +32,33 @@ func LoadDefault() (*Template, error) {
 	return &tpl, nil
 }
 
-// Validate checks required template fields.
+// applyLanguage appends instruction to all system-role messages in conv.
+func applyLanguage(conv *LlmConversation, instruction string) {
+	for i := range conv.Messages {
+		if conv.Messages[i].Role == "system" {
+			conv.Messages[i].Content += instruction
+		}
+	}
+}
+
+// resolveLang returns the resolved language name for the instruction.
+func resolveLang(lang string) string {
+	if lang == "" {
+		return "Chinese"
+	}
+	return lang
+}
+
+// ApplyLanguage injects a language directive into all system-role messages
+// across MAIN_TASK, PLAN_TASK (if set), and MEMORY_COMPRESSION_TASK.
+func (t *Template) ApplyLanguage(lang string) {
+	instruction := "\n\nAlways respond in " + resolveLang(lang) + "."
+	applyLanguage(&t.MainTask, instruction)
+	if t.PlanTask != nil {
+		applyLanguage(t.PlanTask, instruction)
+	}
+	applyLanguage(&t.MemoryCompressionTask, instruction)
+}
 func (t *Template) Validate() error {
 	if t.TokenWarningThreshold <= 0 {
 		return fmt.Errorf("token_warning_threshold must be positive")
