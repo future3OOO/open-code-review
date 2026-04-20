@@ -218,6 +218,8 @@ func (a *Agent) loadDiffs() error {
 	return nil
 }
 
+// lookupTool returns the provider for a given tool from the registry,
+// or nil if the tool is not registered.
 func lookupTool(reg tool.Registry, t tool.Tool) tool.Provider {
 	p, ok := reg[t.Name()]
 	if !ok {
@@ -368,6 +370,8 @@ func (a *Agent) resolveSystemRule(path string) string {
 	return a.args.SystemRule.Resolve(path)
 }
 
+// executePlanPhase runs the plan task for a single file, sending template messages
+// with resolved placeholders and collecting the LLM response as plan guidance.
 func (a *Agent) executePlanPhase(_ context.Context, newPath, rawDiff, changeFiles, rule string) (string, error) {
 	pt := a.args.Template.PlanTask
 	messages := make([]llm.Message, 0, len(pt.Messages))
@@ -436,6 +440,9 @@ func formatToolDefs(toolDefs []llm.ToolDef) string {
 	return sb.String()
 }
 
+// performLlmCodeReview drives the main LLM conversation loop for a single file.
+// It sends messages with tool definitions, handles tool calls returned by the model,
+// and collects review comments until task_done is called or limits are reached.
 func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message, newPath string) ([]model.LlmComment, error) {
 	toolReqCount := a.args.Template.MaxToolRequestTimes
 
@@ -527,6 +534,9 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 	return a.args.CommentCollector.Comments(), nil
 }
 
+// executeToolCall executes a single tool call from the LLM response and records
+// the result in session history. It handles async dispatch for code_comment when
+// a worker pool is configured, otherwise runs synchronously.
 func (a *Agent) executeToolCall(_ context.Context, newPath string, call llm.ToolCall, rec *session.TaskRecord) tool.TaskCheckpoint {
 	t := tool.OfName(call.Function.Name)
 	if !t.IsKnown() {
@@ -729,6 +739,7 @@ func buildMessageXML(msgs []llm.Message) string {
 	return sb.String()
 }
 
+// min returns the smaller of two integers.
 func min(a, b int) int {
 	if a < b {
 		return a
