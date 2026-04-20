@@ -449,7 +449,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 	for toolReqCount > 0 {
 		select {
 		case <-ctx.Done():
-			return a.collectPendingComments(), ctx.Err()
+			return diff.ResolveLineNumbers(a.collectPendingComments(), a.diffs), ctx.Err()
 		default:
 		}
 
@@ -466,7 +466,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		})
 		if err != nil {
 			rec.SetError(err, time.Since(startTime))
-			return a.collectPendingComments(), fmt.Errorf("LLM completion error: %w", err)
+			return diff.ResolveLineNumbers(a.collectPendingComments(), a.diffs), fmt.Errorf("LLM completion error: %w", err)
 		}
 		rec.SetResponse(resp, time.Since(startTime))
 
@@ -531,7 +531,8 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		fmt.Printf("[argus] Max tool requests reached for %s.\n", newPath)
 	}
 
-	return a.args.CommentCollector.Comments(), nil
+	comments := a.args.CommentCollector.Comments()
+	return diff.ResolveLineNumbers(comments, a.diffs), nil
 }
 
 // executeToolCall executes a single tool call from the LLM response and records
