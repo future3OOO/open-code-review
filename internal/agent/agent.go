@@ -1,5 +1,3 @@
-// Package agent implements the Code Review Native Agent logic ported from Java.
-// It drives a Plan Phase -> Main Loop (tool-use cycle) per file, collecting LLM-generated review comments.
 package agent
 
 import (
@@ -370,15 +368,14 @@ func (a *Agent) resolveSystemRule(path string) string {
 	return a.args.SystemRule.Resolve(path)
 }
 
-// executePlanPhase sends a request to the LLM to produce a structured review plan.
-// Tool descriptions are embedded as text in the system prompt rather than sent as API tools,
-// since the plan phase is single-round — this prevents the model from attempting real tool calls.
 func (a *Agent) executePlanPhase(_ context.Context, newPath, rawDiff, changeFiles, rule string) (string, error) {
 	pt := a.args.Template.PlanTask
 	messages := make([]llm.Message, 0, len(pt.Messages))
 	for _, m := range pt.Messages {
 		content := m.Content
 		content = strings.ReplaceAll(content, "{{current_system_date_time}}", a.currentDate)
+		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
+		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
 		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
 		content = strings.ReplaceAll(content, "{{system_rule}}", rule)
 		content = strings.ReplaceAll(content, "{{change_files}}", changeFiles)
@@ -439,13 +436,6 @@ func formatToolDefs(toolDefs []llm.ToolDef) string {
 	return sb.String()
 }
 
-// performLlmCodeReview runs the iterative tool-use loop until task_done, max iterations, or empty tool calls.
-//
-// Mirrors the Java implementation's approach where the CODE_COMMENT tool is submitted
-// to a subtaskExecutor so that the main LLM loop continues without blocking on the
-// expensive post-processing (line-range tracking, re-tracking, reflection, validation).
-// When CommentWorkerPool is configured, comments are collected asynchronously; otherwise
-// they are processed synchronously but the main-loop semantics remain identical.
 func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message, newPath string) ([]model.LlmComment, error) {
 	toolReqCount := a.args.Template.MaxToolRequestTimes
 
@@ -537,17 +527,6 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 	return a.args.CommentCollector.Comments(), nil
 }
 
-// executeToolCall handles a single tool call from the LLM.
-// The optional rec parameter records the tool execution in the session history.
-//
-// For the CODE_COMMENT tool this mirrors the Java branch at CodeReviewNativeAgent L640-642:
-//
-//	if (tool == Tool.CODE_COMMENT) {
-//	    pendingCommentFutures.add(subtaskExecutor.submit(() -> getCodeComments(...)));
-//	    return COMMENT_SUCCEED;  // non-blocking
-//	}
-//
-// All other tools execute synchronously on the calling goroutine.
 func (a *Agent) executeToolCall(_ context.Context, newPath string, call llm.ToolCall, rec *session.TaskRecord) tool.TaskCheckpoint {
 	t := tool.OfName(call.Function.Name)
 	if !t.IsKnown() {
