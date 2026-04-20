@@ -12,7 +12,10 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	tiktoken "github.com/pkoukk/tiktoken-go"
 )
 
 const maxRetries = 10 // Maximum number of retry attempts with exponential backoff.
@@ -232,10 +235,74 @@ func (c *Client) GeneralRequest(messages []Message, model string, tools []ToolDe
 	})
 }
 
-// CountTokens is a stub — callers should integrate tiktoken or an external tokenizer service.
-// Returns an estimate based on character count (~4 chars per token for English).
+// --- Token counting with tiktoken ---
+
+var (
+	tokenizer     *tiktoken.Tiktoken
+	tokenizerOnce sync.Once
+	tokenizerMu   sync.RWMutex
+)
+
+// SetModelEncoding selects the tiktoken encoding best suited for the given model name.
+// It is safe to call multiple times; subsequent calls replace the previous tokenizer.
+func SetModelEncoding(modelName string) error {
+	var encName string
+	lower := strings.ToLower(modelName)
+
+	switch {
+	// OpenAI latest models
+	case strings.Contains(lower, "o1") || strings.Contains(lower, "o3") || strings.Contains(lower, "o4"):
+		encName = "o200k_base"
+	case strings.Contains(lower, "gpt-4o") || strings.Contains(lower, "gpt-4-turbo"):
+		encName = "cl100k_base"
+	case strings.Contains(lower, "gpt-4"):
+		encName = "cl100k_base"
+	case strings.Contains(lower, "gpt-3.5"):
+		encName = "cl100k_base"
+	// Claude (Anthropic uses cl100k-base-derived encoder; this is the closest public approximation)
+	case strings.Contains(lower, "claude"):
+		encName = "cl100k_base"
+	default:
+		encName = "cl100k_base"
+	}
+
+	enc, err := tiktoken.GetEncoding(encName)
+	if err != nil {
+		return fmt.Errorf("get tiktoken encoding %q: %w", encName, err)
+	}
+
+	tokenizerMu.Lock()
+	tokenizer = enc
+	tokenizerMu.Unlock()
+	return nil
+}
+
+// ensureTokenizer lazily initializes the default tokenizer once.
+func ensureTokenizer() {
+	tokenizerOnce.Do(func() {
+		if err := SetModelEncoding(""); err != nil {
+			// Fallback should not happen as cl100k_base is built-in
+			panic(err)
+		}
+	})
+}
+
+// CountTokens returns the number of tokens in text using tiktoken BPE encoding.
+// Before any explicit SetModelEncoding call, defaults to cl100k_base.
 func CountTokens(text string) int {
-	return len([]byte(text)) / 4
+	if text == "" {
+		return 0
+	}
+	ensureTokenizer()
+
+	tokenizerMu.RLock()
+	tke := tokenizer
+	tokenizerMu.RUnlock()
+
+	if tke == nil {
+		return len([]byte(text)) / 4
+	}
+	return len(tke.Encode(text, nil, nil))
 }
 
 // StreamCompletion initiates a streaming chat completion. The callback is invoked per chunk.
