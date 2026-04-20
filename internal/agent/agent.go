@@ -692,38 +692,6 @@ func (a *Agent) compressAndRecord(msgs []llm.Message, filePath string) []llm.Mes
 	return compressed
 }
 
-// compressMessages runs the memory compression task and replaces old messages with a summary.
-func compressMessages(msgs []llm.Message, compTask template.LlmConversation, client *llm.Client, model string) []llm.Message {
-	if len(compTask.Messages) == 0 || len(msgs) <= 2 {
-		return msgs[:min(len(msgs), 2)]
-	}
-
-	contextXML := buildMessageXML(msgs[2:])
-	compressionMsgs := make([]llm.Message, 0, len(compTask.Messages))
-	for _, m := range compTask.Messages {
-		content := strings.ReplaceAll(m.Content, "{{context}}", contextXML)
-		compressionMsgs = append(compressionMsgs, llm.NewTextMessage(m.Role, content))
-	}
-
-	resp, err := client.GeneralRequest(compressionMsgs, model, nil)
-	if err != nil {
-		fmt.Printf("[argus] Memory compression failed: %v\n", err)
-		return msgs[:2]
-	}
-
-	summary := resp.Content()
-	if summary == "" {
-		return msgs[:2]
-	}
-
-	compressed := msgs[:2]
-	// Append summary to the original user prompt
-	userMsg := compressed[1]
-	currentText := userMsg.ExtractText()
-	compressed[1] = llm.NewTextMessage(userMsg.Role, currentText+"\n\n"+summary)
-	return compressed
-}
-
 func buildMessageXML(msgs []llm.Message) string {
 	var sb strings.Builder
 	for i, m := range msgs {
