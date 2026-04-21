@@ -15,6 +15,7 @@ import (
 	"github.com/argus-review/argus/internal/llm"
 	"github.com/argus-review/argus/internal/model"
 	"github.com/argus-review/argus/internal/session"
+	"github.com/argus-review/argus/internal/telemetry"
 	"github.com/argus-review/argus/internal/tool"
 )
 
@@ -161,12 +162,19 @@ func New(args Args) *Agent {
 // Run executes the full review pipeline: parse diffs -> plan per file -> LLM tool-loop -> collect comments.
 func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 	// Step 1: Parse diffs
+	ctx, diffSpan := telemetry.StartSpan(ctx, "diff.parse")
 	if err := a.loadDiffs(); err != nil {
+		diffSpan.End()
 		return nil, fmt.Errorf("load diffs: %w", err)
 	}
+	telemetry.SetAttr(diffSpan, "files.changed", len(a.diffs))
+	telemetry.SetAttr(diffSpan, "lines.inserted", int64(a.totalInsertions))
+	telemetry.SetAttr(diffSpan, "lines.deleted", int64(a.totalDeletions))
+	diffSpan.End()
 
 	if len(a.diffs) == 0 {
 		fmt.Println("[argus] No files changed. Skipping review.")
+		telemetry.Event(ctx, "no.files.changed")
 		a.session.Finalize()
 		return nil, nil
 	}
@@ -174,9 +182,18 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 	a.currentDate = time.Now().Format("2006-01-02 15:04")
 
 	fmt.Printf("[argus] Reviewing %d file(s) in %s\n", len(a.diffs), a.args.RepoDir)
+	telemetry.Event(ctx, "review.started",
+		telemetry.AnyToAttr("file.count", len(a.diffs)),
+		telemetry.AnyToAttr("repo.dir", a.args.RepoDir))
+
+	// Record file count metric.
+	telemetry.RecordFilesReviewed(ctx, int64(len(a.diffs)))
 
 	// Step 2: Dispatch per-file subtasks concurrently
 	comments, err := a.dispatchSubtasks(ctx)
+	if len(comments) > 0 {
+		telemetry.RecordCommentsGenerated(ctx, int64(len(comments)))
+	}
 	a.session.Finalize()
 	return comments, err
 }
@@ -230,6 +247,11 @@ func lookupTool(reg tool.Registry, t tool.Tool) tool.Provider {
 
 // dispatchSubtasks runs the Plan + Main phases for each changed file concurrently.
 func (a *Agent) dispatchSubtasks(ctx context.Context) ([]model.LlmComment, error) {
+	startTime := time.Now()
+	defer func() {
+		telemetry.RecordReviewDuration(ctx, time.Since(startTime))
+	}()
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var allComments []model.LlmComment
@@ -262,6 +284,8 @@ func (a *Agent) dispatchSubtasks(ctx context.Context) ([]model.LlmComment, error
 			fileComments, err := a.executeSubtask(fileCtx, d)
 			if err != nil {
 				fmt.Printf("[argus] Subtask error for %s: %v\n", d.NewPath, err)
+				telemetry.ErrorEvent(fileCtx, "subtask.error", err,
+					telemetry.AnyToAttr("file.path", d.NewPath))
 			}
 			mu.Lock()
 			allComments = append(allComments, fileComments...)
@@ -275,6 +299,13 @@ func (a *Agent) dispatchSubtasks(ctx context.Context) ([]model.LlmComment, error
 
 // executeSubtask performs the Plan Phase + Main Loop for a single file.
 func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) ([]model.LlmComment, error) {
+	ctx, span := telemetry.StartSpan(ctx, "subtask.execute."+d.NewPath)
+	defer span.End()
+	telemetry.SetAttr(span, "file.path", d.NewPath)
+	telemetry.SetAttr(span, "lines.changed", d.Insertions+d.Deletions)
+	telemetry.SetAttr(span, "lines.inserted", d.Insertions)
+	telemetry.SetAttr(span, "lines.deleted", d.Deletions)
+
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -293,11 +324,17 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) ([]model.LlmCo
 	var planResult string
 	if a.args.Template.PlanTask != nil && len(a.args.Template.PlanTask.Messages) > 0 && threshold > 0 && changeLines < int64(threshold) {
 		fmt.Printf("[argus] Skipping plan phase for %s (%d lines < threshold %d)\n", newPath, changeLines, threshold)
+		telemetry.Event(ctx, "plan.skipped",
+			telemetry.AnyToAttr("file.path", newPath),
+			telemetry.AnyToAttr("lines.changed", changeLines),
+			telemetry.AnyToAttr("threshold", threshold))
 	} else if a.args.Template.PlanTask != nil && len(a.args.Template.PlanTask.Messages) > 0 {
 		var err error
 		planResult, err = a.executePlanPhase(ctx, newPath, d.Diff, changeFilesExcludingCurrent, rule)
 		if err != nil {
 			fmt.Printf("[argus] Plan phase failed for %s: %v (continuing without plan)\n", newPath, err)
+			telemetry.Eventf(ctx, "plan.failed", err.Error(),
+				telemetry.AnyToAttr("file.path", newPath))
 			planResult = ""
 		}
 	}
@@ -328,6 +365,10 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) ([]model.LlmCo
 	if tokenCount > a.args.Template.TokenWarningThreshold {
 		fmt.Printf("[argus] WARNING: prompt tokens (%d) exceed threshold (%d) for %s\n",
 			tokenCount, a.args.Template.TokenWarningThreshold, newPath)
+		telemetry.Event(ctx, "token.threshold.exceeded",
+			telemetry.AnyToAttr("file.path", newPath),
+			telemetry.AnyToAttr("tokens", tokenCount),
+			telemetry.AnyToAttr("threshold", a.args.Template.TokenWarningThreshold))
 		return nil, nil
 	}
 
@@ -464,11 +505,22 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 			Messages: messages,
 			Tools:    a.args.MainToolDefs,
 		})
+		duration := time.Since(startTime)
 		if err != nil {
-			rec.SetError(err, time.Since(startTime))
+			rec.SetError(err, duration)
+			telemetry.RecordLLMRequest(ctx, a.args.Model, duration, 0, 0, "error")
 			return diff.ResolveLineNumbers(a.collectPendingComments(), a.diffs), fmt.Errorf("LLM completion error: %w", err)
 		}
-		rec.SetResponse(resp, time.Since(startTime))
+		rec.SetResponse(resp, duration)
+		// Record LLM metrics with token info if available.
+		inputTokens := int64(0)
+		outputTokens := int64(0)
+		if resp.Headers != nil {
+			if v := resp.Headers.Get("X-RateLimit-Remaining-Tokens"); v != "" { /* not available */ }
+		}
+		_ = inputTokens // placeholder for token counting
+		_ = outputTokens
+		telemetry.RecordLLMRequest(ctx, a.args.Model, duration, inputTokens, outputTokens, "ok")
 
 		content := resp.Content()
 		calls := resp.ToolCalls()
@@ -538,7 +590,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 // executeToolCall executes a single tool call from the LLM response and records
 // the result in session history. It handles async dispatch for code_comment when
 // a worker pool is configured, otherwise runs synchronously.
-func (a *Agent) executeToolCall(_ context.Context, newPath string, call llm.ToolCall, rec *session.TaskRecord) tool.TaskCheckpoint {
+func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.ToolCall, rec *session.TaskRecord) tool.TaskCheckpoint {
 	t := tool.OfName(call.Function.Name)
 	if !t.IsKnown() {
 		return tool.Of(tool.NotAvailableMsg)
@@ -566,6 +618,8 @@ func (a *Agent) executeToolCall(_ context.Context, newPath string, call llm.Tool
 		}
 	}
 
+	startTime := time.Now()
+
 	// Async path for code_comment when worker pool is configured
 	// Mirrors Java: pendingCommentFutures.add(subtaskExecutor.submit(() -> getCodeComments(...)))
 	if t == tool.CodeComment && a.args.CommentWorkerPool != nil {
@@ -573,20 +627,30 @@ func (a *Agent) executeToolCall(_ context.Context, newPath string, call llm.Tool
 			rec.AddToolResult(t.Name(), call.Function.Arguments, "(async)")
 		}
 		pool := a.args.CommentWorkerPool
+		telemetry.PrintToolCallStarted(t.Name(), args)
 		pool.Submit(func() ([]model.LlmComment, error) {
 			_, _ = p.Execute(args) // provider parses args and adds to collector
+			telemetry.RecordToolCall(ctx, t.Name(), time.Since(startTime), true)
 			return []model.LlmComment{}, nil
 		})
 		// Return immediate success - actual comment processing continues off
 		// the critical path, exactly like Java's subtaskExecutor.submit for CODE_COMMENT.
+		telemetry.RecordToolCall(ctx, t.Name(), time.Since(startTime), true)
 		return tool.Of(tool.CommentSucceed)
 	}
 
 	// Synchronous path for all other tools
+	telemetry.PrintToolCallStarted(t.Name(), args)
 	result, err := p.Execute(args)
+	dur := time.Since(startTime)
+	ok := err == nil
+	telemetry.RecordToolCall(ctx, t.Name(), dur, ok)
+
 	if err != nil {
+		telemetry.PrintToolCallError(t.Name(), err)
 		return tool.Of(fmt.Sprintf("Error executing tool %s: %v", t.Name(), err))
 	}
+	telemetry.PrintToolCallFinished(t.Name(), dur)
 	if rec != nil {
 		rec.AddToolResult(t.Name(), call.Function.Arguments, result)
 	}

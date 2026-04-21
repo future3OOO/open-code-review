@@ -3,11 +3,20 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"time"
+
+	"github.com/argus-review/argus/internal/telemetry"
 )
 
 func main() {
+	ctx := context.Background()
+	if telemetry.Init(ctx) {
+		defer telemetry.ShutdownWithTimeout(ctx, 5*time.Second)
+	}
+
 	if err := dispatch(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

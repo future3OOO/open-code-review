@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/argus-review/argus/internal/agent"
 	"github.com/argus-review/argus/internal/config/rules"
 	"github.com/argus-review/argus/internal/config/template"
 	"github.com/argus-review/argus/internal/config/toolsconfig"
 	"github.com/argus-review/argus/internal/llm"
+	"github.com/argus-review/argus/internal/telemetry"
 	"github.com/argus-review/argus/internal/tool"
 )
 
@@ -99,11 +101,23 @@ func runReview(args []string) error {
 		Model:                 model,
 	})
 
-	ctx := context.Background()
+	ctx, span := telemetry.StartSpan(context.Background(), "review.run")
+	defer span.End()
+	startTime := time.Now()
+
 	comments, err := ag.Run(ctx)
 	if err != nil {
+		telemetry.SetAttr(span, "error", err.Error())
 		return fmt.Errorf("review failed: %w", err)
 	}
+
+	// Record summary metrics (files_reviewed is refined by agent.Run).
+	duration := time.Since(startTime)
+	telemetry.RecordReviewDuration(ctx, duration)
+	if len(comments) > 0 {
+		telemetry.RecordCommentsGenerated(ctx, int64(len(comments)))
+	}
+	telemetry.PrintTraceSummary(0, int64(len(comments)), 0, duration)
 
 	if opts.outputFormat == "json" {
 		return outputJSON(comments)
