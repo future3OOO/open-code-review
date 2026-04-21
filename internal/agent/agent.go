@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/argus-review/argus/internal/config/rules"
@@ -92,6 +93,7 @@ type Agent struct {
 	totalDeletions  int64
 	currentDate     string
 	session         *session.SessionHistory
+	totalTokensUsed int64 // accumulated tokens from all LLM calls, accessed atomically
 }
 
 // CommentWorkerPool manages a fixed-size pool of workers dedicated to
@@ -201,6 +203,16 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 // Session returns the session history associated with this Agent.
 func (a *Agent) Session() *session.SessionHistory {
 	return a.session
+}
+
+// FilesReviewed returns the number of changed files included in this review.
+func (a *Agent) FilesReviewed() int64 {
+	return int64(len(a.diffs))
+}
+
+// TotalTokensUsed returns the accumulated total tokens from all LLM calls.
+func (a *Agent) TotalTokensUsed() int64 {
+	return atomic.LoadInt64(&a.totalTokensUsed)
 }
 
 // loadDiffs populates the diff-related fields.
@@ -435,6 +447,9 @@ func (a *Agent) executePlanPhase(_ context.Context, newPath, rawDiff, changeFile
 
 	resp, err := a.args.LLMClient.GeneralRequest(messages, a.args.Model, nil)
 	rec.SetResponse(resp, time.Since(startTime))
+	if resp.Usage != nil {
+		atomic.AddInt64(&a.totalTokensUsed, int64(resp.Usage.TotalTokens))
+	}
 	if err != nil {
 		rec.SetError(err, time.Since(startTime))
 		return "", fmt.Errorf("plan request: %w", err)
@@ -518,6 +533,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 			totalTokens = resp.Usage.TotalTokens
 		}
 		telemetry.RecordLLMRequest(ctx, a.args.Model, duration, totalTokens, "ok")
+		atomic.AddInt64(&a.totalTokensUsed, totalTokens)
 
 		content := resp.Content()
 		calls := resp.ToolCalls()
@@ -740,6 +756,9 @@ func (a *Agent) compressAndRecord(msgs []llm.Message, filePath string) []llm.Mes
 		return msgs[:2]
 	}
 	rec.SetResponse(resp, duration)
+	if resp.Usage != nil {
+		atomic.AddInt64(&a.totalTokensUsed, int64(resp.Usage.TotalTokens))
+	}
 
 	summary := resp.Content()
 	if summary == "" {
