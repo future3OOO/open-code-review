@@ -446,13 +446,13 @@ func (a *Agent) executePlanPhase(_ context.Context, newPath, rawDiff, changeFile
 	startTime := time.Now()
 
 	resp, err := a.args.LLMClient.GeneralRequest(messages, a.args.Model, nil)
-	rec.SetResponse(resp, time.Since(startTime))
-	if resp.Usage != nil {
-		atomic.AddInt64(&a.totalTokensUsed, int64(resp.Usage.TotalTokens))
-	}
 	if err != nil {
 		rec.SetError(err, time.Since(startTime))
 		return "", fmt.Errorf("plan request: %w", err)
+	}
+	rec.SetResponse(resp, time.Since(startTime))
+	if resp.Usage != nil {
+		atomic.AddInt64(&a.totalTokensUsed, int64(resp.Usage.TotalTokens))
 	}
 	fmt.Printf("[argus] Plan completed for %s\n", newPath)
 	return resp.Content(), nil
