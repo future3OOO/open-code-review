@@ -33,7 +33,7 @@ func (p *FileReadProvider) Execute(args map[string]any) (string, error) {
 
 	content, err := p.FileReader.Read(filePath)
 	if err != nil {
-		return fmt.Sprintf("Error: file %q not found: %v", filePath, err), nil
+		return "", fmt.Errorf("file %q not found: %w", filePath, err)
 	}
 
 	lines := strings.Split(content, "\n")
@@ -47,7 +47,7 @@ func (p *FileReadProvider) Execute(args map[string]any) (string, error) {
 
 	start := int(startLine) - 1
 	if start >= totalLines {
-		return fmt.Sprintf("Error: file %q has only %d lines, requested range %d-%d", filePath, totalLines, int(startLine), int(endLine)), nil
+		return "", fmt.Errorf("file %q has only %d lines, requested range %d-%d", filePath, totalLines, int(startLine), int(endLine))
 	}
 
 	// Apply 500-line cap and track truncation.

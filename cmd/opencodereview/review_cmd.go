@@ -97,7 +97,7 @@ func runReview(args []string) error {
 		PlanToolDefs:          planToolDefs,
 		MainToolDefs:          mainToolDefs,
 		CommentCollector:      collector,
-		CommentWorkerPool:     agent.NewCommentWorkerPool(8),
+		CommentWorkerPool:     agent.NewCommentWorkerPool(opts.concurrency),
 		MaxConcurrency:        opts.concurrency,
 		PerFileTimeoutMinutes: opts.perFileTimeout,
 		Debug:                 opts.debug,

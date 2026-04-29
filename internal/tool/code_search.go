@@ -37,7 +37,7 @@ func (p *CodeSearchProvider) Execute(args map[string]any) (string, error) {
 
 	result, err := p.gitGrep(searchText, caseSensitive, usePerlRegexp, patterns)
 	if err != nil {
-		return "The system encountered some problems when calling the code_search tool. Please try a different tool.", nil
+		return "", fmt.Errorf("code_search failed: %w", err)
 	}
 	return result, nil
 }

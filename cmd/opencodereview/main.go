@@ -37,7 +37,7 @@ func dispatch() error {
 	}
 
 	switch args[0] {
-	case "--version", "-v":
+	case "--version", "-V":
 		printVersion()
 		return nil
 	case "version":

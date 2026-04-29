@@ -134,7 +134,10 @@ func (p *CommentWorkerPool) Submit(f func() ([]model.LlmComment, error)) {
 		p.semaphore <- struct{}{}        // acquire
 		defer func() { <-p.semaphore }() // release
 
-		comments, _ := f() // errors are logged; results are merged below
+		comments, err := f()
+		if err != nil {
+			fmt.Printf("[ocr] CommentWorkerPool error: %v\n", err)
+		}
 		p.resultsMu.Lock()
 		p.results = append(p.results, comments...)
 		p.resultsMu.Unlock()
