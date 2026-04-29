@@ -433,14 +433,12 @@ func (a *Agent) resolveSystemRule(path string) string {
 
 // executePlanPhase runs the plan task for a single file, sending template messages
 // with resolved placeholders and collecting the LLM response as plan guidance.
-func (a *Agent) executePlanPhase(_ context.Context, newPath, rawDiff, changeFiles, rule string) (string, error) {
+func (a *Agent) executePlanPhase(ctx context.Context, newPath, rawDiff, changeFiles, rule string) (string, error) {
 	pt := a.args.Template.PlanTask
 	messages := make([]llm.Message, 0, len(pt.Messages))
 	for _, m := range pt.Messages {
 		content := m.Content
 		content = strings.ReplaceAll(content, "{{current_system_date_time}}", a.currentDate)
-		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
-		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
 		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
 		content = strings.ReplaceAll(content, "{{system_rule}}", rule)
 		content = strings.ReplaceAll(content, "{{change_files}}", changeFiles)
@@ -453,7 +451,7 @@ func (a *Agent) executePlanPhase(_ context.Context, newPath, rawDiff, changeFile
 	rec := fs.AppendTaskRecord(session.PlanTask, messages)
 	startTime := time.Now()
 
-	resp, err := a.args.LLMClient.GeneralRequest(messages, a.args.Model, nil)
+	resp, err := a.args.LLMClient.GeneralRequestWithCtx(ctx, messages, a.args.Model, nil)
 	if err != nil {
 		rec.SetError(err, time.Since(startTime))
 		return "", fmt.Errorf("plan request: %w", err)
@@ -772,39 +770,8 @@ func (a *Agent) compressAndRecord(msgs []llm.Message, filePath string) []llm.Mes
 		return msgs[:2]
 	}
 
-	compressed := msgs[:2]
-	// Append summary to the original user prompt
-	userMsg := compressed[1]
-	currentText := userMsg.ExtractText()
-	compressed[1] = llm.NewTextMessage(userMsg.Role, currentText+"\n\n"+summary)
-	return compressed
-}
-
-// compressMessages runs the memory compression task and replaces old messages with a summary.
-func compressMessages(msgs []llm.Message, compTask template.LlmConversation, client *llm.Client, model string) []llm.Message {
-	if len(compTask.Messages) == 0 || len(msgs) <= 2 {
-		return msgs[:min(len(msgs), 2)]
-	}
-
-	contextXML := buildMessageXML(msgs[2:])
-	compressionMsgs := make([]llm.Message, 0, len(compTask.Messages))
-	for _, m := range compTask.Messages {
-		content := strings.ReplaceAll(m.Content, "{{context}}", contextXML)
-		compressionMsgs = append(compressionMsgs, llm.NewTextMessage(m.Role, content))
-	}
-
-	resp, err := client.GeneralRequest(compressionMsgs, model, nil)
-	if err != nil {
-		fmt.Printf("[ocr] Memory compression failed: %v\n", err)
-		return msgs[:2]
-	}
-
-	summary := resp.Content()
-	if summary == "" {
-		return msgs[:2]
-	}
-
-	compressed := msgs[:2]
+	compressed := make([]llm.Message, 2)
+	copy(compressed, msgs[:2])
 	// Append summary to the original user prompt
 	userMsg := compressed[1]
 	currentText := userMsg.ExtractText()

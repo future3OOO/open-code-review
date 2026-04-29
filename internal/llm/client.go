@@ -6,6 +6,7 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -203,14 +204,19 @@ type ChatRequest struct {
 
 // Completions sends a chat completion request and returns the parsed response.
 func (c *Client) Completions(req ChatRequest) (*ChatResponse, error) {
+	return c.CompletionsWithCtx(context.Background(), req)
+}
+
+// CompletionsWithCtx sends a chat completion request with context support for cancellation and timeout.
+func (c *Client) CompletionsWithCtx(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	model := req.Model
 	if model == "" {
 		model = c.cfg.Model
 	}
 
 	var result *ChatResponse
-	err := c.withRetry(func() error {
-		resp, err := c.doRequest(model, req)
+	err := c.withRetryCtx(ctx, func() error {
+		resp, err := c.doRequestCtx(ctx, model, req)
 		if err != nil {
 			return err
 		}
@@ -222,7 +228,12 @@ func (c *Client) Completions(req ChatRequest) (*ChatResponse, error) {
 
 // GeneralRequest sends a simple chat request without or with optional tool calls (for plan phase, compression, etc.).
 func (c *Client) GeneralRequest(messages []Message, model string, tools []ToolDef) (*ChatResponse, error) {
-	return c.Completions(ChatRequest{
+	return c.GeneralRequestWithCtx(context.Background(), messages, model, tools)
+}
+
+// GeneralRequestWithCtx sends a simple chat request with context support.
+func (c *Client) GeneralRequestWithCtx(ctx context.Context, messages []Message, model string, tools []ToolDef) (*ChatResponse, error) {
+	return c.CompletionsWithCtx(ctx, ChatRequest{
 		Model:    model,
 		Messages: messages,
 		Tools:    tools,
@@ -369,8 +380,18 @@ func stripThinkTags(s string) string {
 }
 
 func (c *Client) withRetry(fn func() error) error {
+	return c.withRetryCtx(context.Background(), fn)
+}
+
+func (c *Client) withRetryCtx(ctx context.Context, fn func() error) error {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled: %w", ctx.Err())
+		default:
+		}
+
 		lastErr = fn()
 		if lastErr == nil {
 			return nil
@@ -445,12 +466,17 @@ func min(a, b int) int {
 
 // doRequest builds and sends a non-streaming completion request, returning the parsed response.
 func (c *Client) doRequest(model string, req ChatRequest) (*ChatResponse, error) {
+	return c.doRequestCtx(context.Background(), model, req)
+}
+
+// doRequestCtx builds and sends a non-streaming completion request with context support.
+func (c *Client) doRequestCtx(ctx context.Context, model string, req ChatRequest) (*ChatResponse, error) {
 	if model == "" {
 		model = c.cfg.Model
 	}
 	req.Model = model
 	payload, _ := json.Marshal(req)
-	httpReq, err := http.NewRequest(http.MethodPost, c.cfg.URL, bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
