@@ -100,7 +100,6 @@ func runReview(args []string) error {
 		CommentWorkerPool:     agent.NewCommentWorkerPool(opts.concurrency),
 		MaxConcurrency:        opts.concurrency,
 		PerFileTimeoutMinutes: opts.perFileTimeout,
-		Debug:                 opts.debug,
 		Model:                 model,
 	})
 

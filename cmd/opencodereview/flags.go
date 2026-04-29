@@ -103,7 +103,6 @@ type reviewOptions struct {
 	outputFormat   string
 	concurrency    int
 	perFileTimeout int
-	debug          bool
 	showHelp       bool
 }
 
@@ -121,7 +120,6 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	a.StringVarP(&opts.outputFormat, "format", "f", "text", "output format: text or json")
 	a.IntVar(&opts.concurrency, "concurrency", 8, "max concurrent file reviews")
 	a.IntVar(&opts.perFileTimeout, "timeout", 10, "per-file timeout in minutes")
-	a.BoolVar(&opts.debug, "debug", false, "enable debug mode (write session dump to temp/)")
 
 	if err := a.Parse(args); err != nil {
 		return opts, fmt.Errorf("parse flags: %w", err)
@@ -182,7 +180,6 @@ Flags:`)
 	fs.StringVar(&d.commit, "commit", "", "single commit hash or tag to review (vs its parent) (shorthand: -c)")
 	fs.IntVar(&d.concurrency, "concurrency", 8, "max concurrent file reviews")
 	fs.IntVar(&d.perFileTimeout, "timeout", 10, "per-file timeout in minutes")
-	fs.BoolVar(&d.debug, "debug", false, "enable debug mode (write session dump to temp/)")
 	fs.PrintDefaults()
 }
 

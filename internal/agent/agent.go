@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -80,11 +81,8 @@ type Args struct {
 	// template phases (plan/memory_compression) don't specify one.
 	Model string
 
-	// Debug enables debug mode which writes a session dump to temp/.
-	Debug bool
-
 	// Session is an optional session history instance for collecting conversation records.
-	// When nil, a default one is created automatically.
+	// When nil, a default one is created automatically with git branch auto-detected from repoDir.
 	Session *session.SessionHistory
 }
 
@@ -159,9 +157,9 @@ func New(args Args) *Agent {
 		args.CommentCollector = tool.NewCommentCollector()
 	}
 	if args.Session == nil {
-		args.Session = session.New("", args.RepoDir)
+		gitBranch := detectGitBranch(args.RepoDir)
+		args.Session = session.New(args.RepoDir, gitBranch, args.Model)
 	}
-	args.Session.Debug = args.Debug
 	return &Agent{
 		args:    args,
 		session: args.Session,
@@ -795,5 +793,15 @@ func buildMessageXML(msgs []llm.Message) string {
 		}
 	}
 	return sb.String()
+}
+
+// detectGitBranch returns the current git branch name for the given repo, or empty string on failure.
+func detectGitBranch(repoDir string) string {
+	cmd := exec.Command("git", "-C", repoDir, "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := cmd.Output()
+	if err != nil || len(out) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 

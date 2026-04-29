@@ -4,10 +4,7 @@
 package session
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -18,20 +15,22 @@ import (
 type TaskType string
 
 const (
-	PlanTask             TaskType = "plan_task"
-	MainTask             TaskType = "main_task"
+	PlanTask              TaskType = "plan_task"
+	MainTask              TaskType = "main_task"
 	MemoryCompressionTask TaskType = "memory_compression_task"
 )
 
 // SessionHistory is the top-level container for an entire CR run.
 // It is safe for concurrent use by multiple goroutines.
 type SessionHistory struct {
-	mu        sync.Mutex
-	SessionID string
-	RepoDir   string
-	StartTime time.Time
-	EndTime   time.Time
-	Debug     bool
+	mu           sync.Mutex
+	SessionID    string
+	RepoDir      string
+	GitBranch    string
+	Model        string
+	StartTime    time.Time
+	EndTime      time.Time
+	persist      *jsonlWriter
 	FileSessions map[string]*FileSession
 }
 
@@ -40,17 +39,19 @@ type FileSession struct {
 	mu          sync.Mutex
 	FilePath    string
 	TaskRecords map[TaskType][]*TaskRecord
+	session     *SessionHistory // back-reference for JSONL persistence
 }
 
 // TaskRecord captures a single LLM request-response cycle within a file subtask.
 type TaskRecord struct {
-	Type        TaskType
-	RequestNo   int                // sequential number within this task type
-	RequestMessages []llm.Message  // messages sent to LLM
-	Response      *ResponseRecord
-	ToolResults   []ToolResultRecord
-	Duration      time.Duration
-	Error         string
+	Type            TaskType
+	RequestNo       int           // sequential number within this task type
+	RequestMessages []llm.Message // messages sent to LLM
+	Response        *ResponseRecord
+	ToolResults     []ToolResultRecord
+	Duration        time.Duration
+	Error           string
+	fileSession     *FileSession // back-reference for JSONL persistence
 }
 
 // TokenUsage holds estimated token usage for a single LLM request/response cycle.
@@ -77,14 +78,27 @@ type ToolResultRecord struct {
 	Result    string
 }
 
-// New creates a new SessionHistory with the given session ID and repo directory.
-func New(sessionID, repoDir string) *SessionHistory {
-	return &SessionHistory{
-		SessionID:  sessionID,
-		RepoDir:    repoDir,
-		StartTime:  time.Now(),
+// New creates a new SessionHistory with the given repo directory.
+func New(repoDir, gitBranch, model string) *SessionHistory {
+	sessionID := generateUUID()
+	sh := &SessionHistory{
+		SessionID:    sessionID,
+		RepoDir:      repoDir,
+		GitBranch:    gitBranch,
+		Model:        model,
+		StartTime:    time.Now(),
 		FileSessions: make(map[string]*FileSession),
 	}
+
+	p, err := newJSONLWriter(sessionID, repoDir, gitBranch, model)
+	if err != nil {
+		fmt.Printf("[ocr session] warning: failed to create session writer: %v\n", err)
+	} else {
+		sh.persist = p
+		p.WriteSessionStart(sh.StartTime)
+	}
+
+	return sh
 }
 
 // GetOrCreateFileSession returns the FileSession for the given file path,
@@ -98,107 +112,34 @@ func (sh *SessionHistory) GetOrCreateFileSession(filePath string) *FileSession {
 		fs = &FileSession{
 			FilePath:    filePath,
 			TaskRecords: make(map[TaskType][]*TaskRecord),
+			session:     sh,
 		}
 		sh.FileSessions[filePath] = fs
 	}
 	return fs
 }
 
-// Finalize marks the session as complete and sets the end time.
+// Finalize marks the session as complete, sets the end time, and persists
+// the final summary record.
 func (sh *SessionHistory) Finalize() {
 	sh.mu.Lock()
 	sh.EndTime = time.Now()
-	debug := sh.Debug
-	sh.mu.Unlock()
-	if debug {
-		sh.writeDebugDump()
-	}
-}
-
-// --- Debug Dump ---
-
-type sessionSnapshot struct {
-	SessionID    string                   `json:"session_id"`
-	RepoDir      string                   `json:"repo_dir"`
-	StartTime    time.Time                `json:"start_time"`
-	EndTime      time.Time                `json:"end_time"`
-	FileSessions []*fileSessionSnapshot   `json:"file_sessions"`
-}
-
-type fileSessionSnapshot struct {
-	FilePath    string                                 `json:"file_path"`
-	TaskRecords map[string][]*taskRecordSnapshot       `json:"task_records"`
-}
-
-type taskRecordSnapshot struct {
-	Type            string             `json:"type"`
-	RequestNo       int                `json:"request_no"`
-	RequestMessages any                `json:"request_messages"`
-	Response        *ResponseRecord    `json:"response"`
-	ToolResults     []ToolResultRecord `json:"tool_results"`
-	Duration        time.Duration      `json:"duration"`
-	Error           string             `json:"error"`
-}
-
-func (sh *SessionHistory) writeDebugDump() {
-	sessionName := sh.SessionID
-	if sessionName == "" {
-		sessionName = fmt.Sprintf("unknown-%d", time.Now().Unix())
-	}
-
-	sh.mu.Lock()
-	snap := &sessionSnapshot{
-		SessionID:  sh.SessionID,
-		RepoDir:    sh.RepoDir,
-		StartTime:  sh.StartTime,
-		EndTime:    sh.EndTime,
-		FileSessions: make([]*fileSessionSnapshot, 0, len(sh.FileSessions)),
-	}
-	for _, fs := range sh.FileSessions {
-		fs.mu.Lock()
-		fss := &fileSessionSnapshot{
-			FilePath:    fs.FilePath,
-			TaskRecords: make(map[string][]*taskRecordSnapshot),
-		}
-		for ttype, records := range fs.TaskRecords {
-			for _, rec := range records {
-				fss.TaskRecords[string(ttype)] = append(fss.TaskRecords[string(ttype)], &taskRecordSnapshot{
-					Type:            string(rec.Type),
-					RequestNo:       rec.RequestNo,
-					RequestMessages: rec.RequestMessages,
-					Response:        rec.Response,
-					ToolResults:     rec.ToolResults,
-					Duration:        rec.Duration,
-					Error:           rec.Error,
-				})
-			}
-		}
-		fs.mu.Unlock()
-		snap.FileSessions = append(snap.FileSessions, fss)
+	p := sh.persist
+	duration := sh.EndTime.Sub(sh.StartTime)
+	filesReviewed := make([]string, 0, len(sh.FileSessions))
+	for fp := range sh.FileSessions {
+		filesReviewed = append(filesReviewed, fp)
 	}
 	sh.mu.Unlock()
 
-	data, err := json.MarshalIndent(snap, "", "  ")
-	if err != nil {
-		fmt.Printf("[ocr debug] Failed to marshal session history: %v\n", err)
-		return
-	}
-
-	debugDir := filepath.Join(sh.RepoDir, "temp")
-	if err := os.MkdirAll(debugDir, 0755); err != nil {
-		fmt.Printf("[ocr debug] Failed to create debug dir %s: %v\n", debugDir, err)
-		return
-	}
-	filename := filepath.Join(debugDir, fmt.Sprintf("ocr-session-%s.json", sessionName))
-	if err := os.WriteFile(filename, data, 0644); err != nil {
-		fmt.Printf("[ocr debug] Failed to write session dump to %s: %v\n", filename, err)
-	} else {
-		fmt.Printf("[ocr debug] Session history written to %s\n", filename)
+	if p != nil {
+		p.WriteSessionEnd(duration, filesReviewed)
 	}
 }
 
 // AppendTaskRecord adds a new task record to the file session for the given
-// file path and task type. It auto-assigns the RequestNo based on existing records.
+// file path and task type. It auto-assigns the RequestNo based on existing records
+// and writes an llm_request record to the JSONL stream.
 func (fs *FileSession) AppendTaskRecord(taskType TaskType, messages []llm.Message) *TaskRecord {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -207,8 +148,14 @@ func (fs *FileSession) AppendTaskRecord(taskType TaskType, messages []llm.Messag
 		Type:            taskType,
 		RequestNo:       len(fs.TaskRecords[taskType]) + 1,
 		RequestMessages: copyMessages(messages),
+		fileSession:     fs,
 	}
 	fs.TaskRecords[taskType] = append(fs.TaskRecords[taskType], rec)
+
+	if p := fs.session.persist; p != nil {
+		p.WriteLLMRequest(fs.FilePath, taskType, rec.RequestNo, copyMessagesForJSON(messages))
+	}
+
 	return rec
 }
 
@@ -227,8 +174,27 @@ func copyMessages(msgs []llm.Message) []llm.Message {
 	return cp
 }
 
+// copyMessagesForJSON produces a JSON-friendly slice for persistence.
+func copyMessagesForJSON(msgs []llm.Message) any {
+	type msg struct {
+		Role       string `json:"role"`
+		Content    any    `json:"content"`
+		ToolCallID string `json:"tool_call_id,omitempty"`
+	}
+	out := make([]msg, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, msg{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCallID: m.ToolCallID,
+		})
+	}
+	return out
+}
+
 // SetResponse records the LLM response in the most recent TaskRecord of the given type.
-// It computes estimated token usage locally using tiktoken, independent of any API format.
+// It computes estimated token usage locally using tiktoken, independent of any API format,
+// and writes an llm_response record to the JSONL stream.
 func (tr *TaskRecord) SetResponse(resp *llm.ChatResponse, duration time.Duration) {
 	if resp == nil || len(resp.Choices) == 0 {
 		tr.Error = "empty response"
@@ -260,6 +226,20 @@ func (tr *TaskRecord) SetResponse(resp *llm.ChatResponse, duration time.Duration
 		Usage:     usage,
 	}
 	tr.Duration = duration
+
+	if fs := tr.fileSession; fs != nil {
+		if p := fs.session.persist; p != nil {
+			toolCallsJSON := make([]map[string]any, 0, len(choice.Message.ToolCalls))
+			for _, tc := range choice.Message.ToolCalls {
+				toolCallsJSON = append(toolCallsJSON, map[string]any{
+					"id":        tc.ID,
+					"name":      tc.Function.Name,
+					"arguments": tc.Function.Arguments,
+				})
+			}
+			p.WriteLLMResponse(fs.FilePath, tr.Type, content, toolCallsJSON, resp.Model, promptTokens, completionTokens, duration)
+		}
+	}
 }
 
 // SetError records an error for this task record.
@@ -268,12 +248,18 @@ func (tr *TaskRecord) SetError(err error, duration time.Duration) {
 	tr.Duration = duration
 }
 
-// AddToolResult appends a tool call result to this task record.
+// AddToolResult appends a tool call result to this task record and writes a
+// tool_call record to the JSONL stream.
 func (tr *TaskRecord) AddToolResult(toolName, arguments, result string) {
 	tr.ToolResults = append(tr.ToolResults, ToolResultRecord{
 		ToolName:  toolName,
 		Arguments: arguments,
 		Result:    result,
 	})
-}
 
+	if fs := tr.fileSession; fs != nil {
+		if p := fs.session.persist; p != nil {
+			p.WriteToolCall(fs.FilePath, tr.Type, toolName, arguments, result, true, 0)
+		}
+	}
+}
