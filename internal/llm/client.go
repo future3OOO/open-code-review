@@ -12,7 +12,6 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -242,72 +241,79 @@ func (c *Client) GeneralRequestWithCtx(ctx context.Context, messages []Message, 
 
 // --- Token counting with tiktoken ---
 
-var (
-	tokenizer     *tiktoken.Tiktoken
-	tokenizerOnce sync.Once
-	tokenizerMu   sync.RWMutex
-)
+// modelTokenizerCache caches initialized tiktoken encoders keyed by encoding name.
+type modelTokenizerCache struct {
+	mu    sync.RWMutex
+	cache map[string]*tiktoken.Tiktoken
+}
 
-// SetModelEncoding selects the tiktoken encoding best suited for the given model name.
-// It is safe to call multiple times; subsequent calls replace the previous tokenizer.
-func SetModelEncoding(modelName string) error {
-	var encName string
-	lower := strings.ToLower(modelName)
+func newModelTokenizerCache() *modelTokenizerCache {
+	return &modelTokenizerCache{cache: make(map[string]*tiktoken.Tiktoken)}
+}
 
-	switch {
-	// OpenAI latest models
-	case strings.Contains(lower, "o1") || strings.Contains(lower, "o3") || strings.Contains(lower, "o4"):
-		encName = "o200k_base"
-	case strings.Contains(lower, "gpt-4o") || strings.Contains(lower, "gpt-4-turbo"):
-		encName = "cl100k_base"
-	case strings.Contains(lower, "gpt-4"):
-		encName = "cl100k_base"
-	case strings.Contains(lower, "gpt-3.5"):
-		encName = "cl100k_base"
-	// Claude (Anthropic uses cl100k-base-derived encoder; this is the closest public approximation)
-	case strings.Contains(lower, "claude"):
-		encName = "cl100k_base"
-	default:
-		encName = "cl100k_base"
+func (c *modelTokenizerCache) getOrLoad(encName string) (*tiktoken.Tiktoken, error) {
+	// Fast path: read-only check
+	c.mu.RLock()
+	if tke, ok := c.cache[encName]; ok {
+		c.mu.RUnlock()
+		return tke, nil
 	}
+	c.mu.RUnlock()
 
+	// Slow path: load under write lock
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if tke, ok := c.cache[encName]; ok {
+		return tke, nil // another goroutine loaded it already
+	}
 	enc, err := tiktoken.GetEncoding(encName)
 	if err != nil {
-		return fmt.Errorf("get tiktoken encoding %q: %w", encName, err)
+		return nil, fmt.Errorf("get tiktoken encoding %q: %w", encName, err)
 	}
-
-	tokenizerMu.Lock()
-	tokenizer = enc
-	tokenizerMu.Unlock()
-	return nil
+	c.cache[encName] = enc
+	return enc, nil
 }
 
-// ensureTokenizer lazily initializes the default tokenizer once.
-func ensureTokenizer() {
-	tokenizerOnce.Do(func() {
-		if err := SetModelEncoding(""); err != nil {
-			// Network unavailable or encoding load failed — fall back to byte estimation in CountTokens.
-			fmt.Fprintf(os.Stderr, "[ocr] WARNING: tiktoken initialization failed (%v), using byte-based estimation\n", err)
-		}
-	})
-}
+var defaultTokenizer = newModelTokenizerCache()
 
-// CountTokens returns the number of tokens in text using tiktoken BPE encoding.
-// Before any explicit SetModelEncoding call, defaults to cl100k_base.
-func CountTokens(text string) int {
-	if text == "" {
-		return 0
-	}
-	ensureTokenizer()
-
-	tokenizerMu.RLock()
-	tke := tokenizer
-	tokenizerMu.RUnlock()
-
-	if tke == nil {
+// countTokensWithEncoding counts tokens using the specified tiktoken encoding.
+// It lazily caches the tokenizer under the hood. If loading fails, falls back
+// to byte estimation (len(text)/4).
+func countTokensWithEncoding(text string, encName string) int {
+	tke, err := defaultTokenizer.getOrLoad(encName)
+	if err != nil {
+		// Encoding unavailable — fall back to byte estimation.
 		return len([]byte(text)) / 4
 	}
 	return len(tke.Encode(text, nil, nil))
+}
+
+// CountTokens returns the number of tokens in text using the default tiktoken
+// encoding (cl100k_base). For model-specific counting, use CountTokensForModel.
+func CountTokens(text string) int {
+	return CountTokensForModel(text, "")
+}
+
+// CountTokensForModel returns the number of tokens in text using a tiktoken
+// encoding selected based on the given model name. Falls back to cl100k_base.
+func CountTokensForModel(text string, modelName string) int {
+	if text == "" {
+		return 0
+	}
+	encName := encodingForModel(modelName)
+	return countTokensWithEncoding(text, encName)
+}
+
+// encodingForModel selects the tiktoken encoding best suited for the given model name.
+func encodingForModel(modelName string) string {
+	lower := strings.ToLower(modelName)
+	switch {
+	case strings.Contains(lower, "o1") || strings.Contains(lower, "o3") || strings.Contains(lower, "o4"):
+		return "o200k_base"
+	default:
+		return "cl100k_base"
+	}
 }
 
 // StreamCompletion initiates a streaming chat completion. The callback is invoked per chunk.
@@ -457,12 +463,6 @@ func sleepWithBackoff(attempt int) {
 	time.Sleep(delay)
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 // doRequest builds and sends a non-streaming completion request, returning the parsed response.
 func (c *Client) doRequest(model string, req ChatRequest) (*ChatResponse, error) {
