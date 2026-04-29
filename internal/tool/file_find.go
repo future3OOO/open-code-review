@@ -1,51 +1,14 @@
 package tool
 
 import (
-	"os"
-	"path/filepath"
+	"bytes"
+	"os/exec"
 	"strings"
 )
 
 const fileFindMaxCount = 100
 
-var ignoredStartPatterns = []string{
-	"test/report/",
-	"_packages/",
-	"target/",
-	".happypack/",
-	"report/",
-	".cachefile/",
-	"iscroll/",
-	"app/proxy-class/",
-	"mocks_data/",
-	"tool_qingxi/",
-	".idea/",
-	".vscode/",
-	"pkgs/",
-}
-
-var ignoredIncludePatterns = []string{
-	"node_modules/",
-	"highcharts",
-	"node_modules_bak/",
-	".idea",
-	".bak",
-	"node_modules",
-	"webapp/ace/demo/",
-	"/.m2/",
-	"/assets/font-awesome/",
-	"kylin_modules/",
-	".pref",
-	"/.settings/",
-	"/.dep_create/",
-	"/.svn/",
-	"/font-awesome/",
-	"/kitchen-sink/",
-	"/_CodeSignature/",
-	"vendor/",
-}
-
-// FileFindProvider finds files by name or pattern in the repository.
+// FileFindProvider finds files by name or pattern in the repository using git ls-files.
 type FileFindProvider struct {
 	FileReader *FileReader
 }
@@ -62,18 +25,16 @@ func (p *FileFindProvider) Execute(args map[string]any) (string, error) {
 
 	caseSensitive, _ := args["case_sensitive"].(bool)
 
+	files, err := p.listGitFiles()
+	if err != nil {
+		return "", err
+	}
+
 	var matched []string
-	err := filepath.Walk(p.FileReader.RepoDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		relPath, _ := filepath.Rel(p.FileReader.RepoDir, path)
-		if isIgnored(relPath) {
-			return nil
-		}
-		base := relPath
-		if idx := strings.LastIndex(relPath, string(os.PathSeparator)); idx != -1 {
-			base = relPath[idx+1:]
+	for _, f := range files {
+		base := f
+		if idx := strings.LastIndex(f, "/"); idx != -1 {
+			base = f[idx+1:]
 		}
 		match := false
 		if caseSensitive {
@@ -82,15 +43,11 @@ func (p *FileFindProvider) Execute(args map[string]any) (string, error) {
 			match = strings.Contains(strings.ToLower(base), strings.ToLower(queryName))
 		}
 		if match {
-			matched = append(matched, relPath)
+			matched = append(matched, f)
 		}
 		if len(matched) >= fileFindMaxCount {
-			return filepath.SkipDir
+			break
 		}
-		return nil
-	})
-	if err != nil {
-		return "// The file was not found", nil
 	}
 
 	if len(matched) == 0 {
@@ -99,20 +56,47 @@ func (p *FileFindProvider) Execute(args map[string]any) (string, error) {
 	return strings.Join(matched, "\n"), nil
 }
 
-func isIgnored(path string) bool {
-	// Exclude files without extension
-	if !strings.Contains(path, ".") {
-		return true
+// listGitFiles returns tracked and untracked files (respecting .gitignore) via git ls-files.
+func (p *FileFindProvider) listGitFiles() ([]string, error) {
+	cmd := exec.Command("git", "ls-files", "--cached", "--others", "--exclude-standard")
+	cmd.Dir = p.FileReader.RepoDir
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
 	}
-	for _, p := range ignoredStartPatterns {
-		if strings.HasPrefix(path, p) {
-			return true
+
+	var files []string
+	lines := bytes.Split(bytes.TrimRight(output, "\n"), []byte{'\n'})
+	for _, line := range lines {
+		if len(line) > 0 {
+			s := string(line)
+			// Skip binary-like files that lack meaningful extensions patterns
+			// and filter out paths in common generated/artifact directories.
+			if shouldSkipFile(s) {
+				continue
+			}
+			files = append(files, s)
 		}
 	}
-	for _, p := range ignoredIncludePatterns {
-		if strings.Contains(path, p) {
-			return true
+	return files, nil
+}
+
+// shouldSkipFile returns true if a git ls-files output path should be skipped.
+// Keeps only widely useful files (those with recognizable extensions).
+func shouldSkipFile(path string) bool {
+	// Keep extensionless build/config files like Makefile, Dockerfile, LICENSE
+	base := path
+	if idx := strings.LastIndex(path, "/"); idx != -1 {
+		base = path[idx+1:]
+	}
+	hasExt := strings.Contains(base, ".")
+	if !hasExt {
+		// Allow well-known extensionless files
+		switch base {
+		case "Makefile", "Dockerfile", "LICENSE", "Vagrantfile", "Containerfile":
+			return false
 		}
+		return true // skip other extensionless files
 	}
 	return false
 }

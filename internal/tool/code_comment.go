@@ -20,8 +20,14 @@ func (p *CodeCommentProvider) Execute(args map[string]any) (string, error) {
 	}
 
 	// Parse the "comments" array from the tool call arguments.
-	rawComments, ok := args["comments"].([]any)
-	if !ok || len(rawComments) == 0 {
+	// LLM sometimes double-encodes the array as a JSON string.
+	var rawComments []any
+	if arr, ok := args["comments"].([]any); ok && len(arr) > 0 {
+		rawComments = arr
+	} else if s, ok := args["comments"].(string); ok && s != "" {
+		_ = json.Unmarshal([]byte(s), &rawComments)
+	}
+	if len(rawComments) == 0 {
 		raw, _ := json.Marshal(args)
 		return fmt.Sprintf("Error: 'comments' array is required. Got args: %s", string(raw)), nil
 	}

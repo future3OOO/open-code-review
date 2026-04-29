@@ -1,10 +1,12 @@
 package tool
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 // ReviewMode represents the active review mode.
@@ -77,7 +79,10 @@ func (fr *FileReader) readFromDisk(path string) (string, error) {
 }
 
 func (fr *FileReader) readFromGitShow(path string) (string, error) {
-	cmd := exec.Command("git", "show", fr.Ref+":"+path)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.quotepath=false", "show", fr.Ref+":"+path)
 	cmd.Dir = fr.RepoDir
 	output, err := cmd.Output()
 	if err != nil {
