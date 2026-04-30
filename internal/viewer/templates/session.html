@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Session Detail - Open Code Review Viewer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<nav class="breadcrumb"><a href="/">Open Code Review Viewer</a> &rsaquo; <a href="/r/{{.EncodedRepo}}">{{.RepoName}}</a> &rsaquo; Session {{.Session.Summary.SessionID | truncate 12}}</nav>
+<main>
+<div class="session-header">
+    <h2>Session: {{.Session.Summary.SessionID}}</h2>
+    <div class="meta">
+        <span><strong>CWD:</strong> {{.Session.Summary.CWD}}</span>
+        <span><strong>Branch:</strong> {{.Session.Summary.GitBranch}}</span>
+        <span><strong>Model:</strong> <code>{{.Session.Summary.Model}}</code></span>
+        <span><strong>Duration:</strong> {{formatDuration .Session.Summary.DurationSec}}</span>
+        <span><strong>Files:</strong> {{.Session.Summary.FileCount}}</span>
+    </div>
+</div>
+
+<div class="token-summary">
+    <h3>Token Usage</h3>
+    <div class="token-stats">
+        <div class="token-item">
+            <div class="token-value">{{.Session.TokenUsage.TotalPromptTokens}}</div>
+            <div class="token-label">Prompt Tokens</div>
+        </div>
+        <div class="token-item">
+            <div class="token-value">{{.Session.TokenUsage.TotalCompletionTokens}}</div>
+            <div class="token-label">Completion Tokens</div>
+        </div>
+        <div class="token-item">
+            <div class="token-value">{{add .Session.TokenUsage.TotalPromptTokens .Session.TokenUsage.TotalCompletionTokens}}</div>
+            <div class="token-label">Total Tokens</div>
+        </div>
+        <div class="token-item">
+            <div class="token-value">{{.Session.TokenUsage.RequestCount}}</div>
+            <div class="token-label">LLM Requests</div>
+        </div>
+    </div>
+    {{with .Session.TokenUsage.FileTokenBreakdown}}
+    <table class="token-table">
+        <thead><tr><th>File</th><th>Prompt</th><th>Completion</th><th>Total</th></tr></thead>
+        <tbody>
+        {{range .}}
+            <tr>
+                <td title="{{.FilePath}}">{{.FilePath | truncate 60}}</td>
+                <td>{{.PromptTokens}}</td>
+                <td>{{.CompletionTokens}}</td>
+                <td><strong>{{add .PromptTokens .CompletionTokens}}</strong></td>
+            </tr>
+        {{end}}
+        </tbody>
+    </table>
+    {{end}}
+</div>
+
+{{if .Session.Summary.FilesReviewed}}
+<h3>Files Reviewed</h3>
+<ul class="file-list">
+{{range .Session.Summary.FilesReviewed}}
+    <li>{{.}}</li>
+{{end}}
+</ul>
+{{end}}
+
+<h3>Conversations ({{len .Session.Files}} files)</h3>
+{{range .Session.Files}}
+<details>
+    <summary><strong>{{.FilePath}}</strong></summary>
+    <div class="task-group">
+        {{range $tt, $cards := .Tasks}}
+        <h4>{{$tt}}</h4>
+        {{range $cards}}
+        <div class="card">
+            <div class="card-header">
+                <span>Request #{{.RequestNo}}</span>
+                {{if .Model}}<span class="badge">{{.Model}}</span>{{end}}
+                {{if or .PromptTokens .CompletionTokens}}<span class="badge">P:{{.PromptTokens}} C:{{.CompletionTokens}}</span>{{end}}
+                {{if .DurationMs}}<span class="badge">{{.DurationMs}}ms</span>{{end}}
+                {{if .Error}}<span class="badge error">{{.Error}}</span>{{end}}
+            </div>
+            {{with .ResponseContent}}
+            <div class="card-body response-content">
+                <pre>{{.}}</pre>
+            </div>
+            {{end}}
+            {{if .ToolCalls}}
+            <div class="tool-calls">
+                {{range .ToolCalls}}
+                <div class="tool-call {{if not .Ok}}error{{end}}">
+                    <strong>{{.Name}}</strong>
+                    <details>
+                        <summary>Arguments &amp; Result</summary>
+                        <div class="tool-args"><pre>{{.Arguments}}</pre></div>
+                        <div class="tool-result"><pre>{{.Result}}</pre></div>
+                    </details>
+                </div>
+                {{end}}
+            </div>
+            {{end}}
+        </div>
+        {{end}}
+        {{end}}
+    </div>
+</details>
+{{end}}
+</main>
+</body>
+</html>

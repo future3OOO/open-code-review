@@ -49,6 +49,8 @@ func dispatch() error {
 		return runConfig(args[1:])
 	case "llm":
 		return runLLM(args[1:])
+	case "viewer":
+		return runViewer(args[1:])
 	case "-h", "--help":
 		printTopLevelUsage()
 		return nil
@@ -67,6 +69,7 @@ Commands:
   review, r    Start a code review
   config       Manage configuration settings
   llm          LLM utility commands
+  viewer    Start the WebUI session viewer
   version      Show version information
 
 Examples:

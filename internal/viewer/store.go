@@ -1,0 +1,417 @@
+// Package viewer provides a read-only WebUI for browsing session records
+// produced by open-code-review runs. It scans JSONL files under
+// $HOME/.open-code-review/sessions/, parses them, and exposes structured data.
+package viewer
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+// SessionsRoot returns the root directory where session JSONL files are stored.
+func SessionsRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	return filepath.Join(home, ".open-code-review", "sessions"), nil
+}
+
+// RepoInfo represents a discovered repository from the sessions directory.
+type RepoInfo struct {
+	EncodedPath  string    // encoded directory name on disk
+	SessionCount int
+	LastModified time.Time
+}
+
+// DiscoverRepos walks the sessions root and returns one entry per subdirectory.
+func DiscoverRepos(root string) ([]RepoInfo, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read sessions dir: %w", err)
+	}
+
+	var repos []RepoInfo
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		repoDir := filepath.Join(root, e.Name())
+		info := RepoInfo{EncodedPath: e.Name()}
+
+		subEntries, err := os.ReadDir(repoDir)
+		if err != nil {
+			continue
+		}
+		for _, se := range subEntries {
+			if strings.HasSuffix(se.Name(), ".jsonl") {
+				info.SessionCount++
+				if fi, err := se.Info(); err == nil {
+					if fi.ModTime().After(info.LastModified) {
+						info.LastModified = fi.ModTime()
+					}
+				}
+			}
+		}
+		if info.SessionCount > 0 {
+			repos = append(repos, info)
+		}
+	}
+
+	sort.Slice(repos, func(i, j int) bool {
+		return repos[i].LastModified.After(repos[j].LastModified)
+	})
+	return repos, nil
+}
+
+// SessionSummary is built from session_start and session_end records.
+type SessionSummary struct {
+	SessionID     string
+	Timestamp     time.Time
+	CWD           string
+	GitBranch     string
+	Model         string
+	FilesReviewed []string
+	DurationSec   float64
+	FileCount     int
+}
+
+// ListSessions returns lightweight summaries for all sessions in a repo subdir.
+func ListSessions(root, encodedRepo string) ([]SessionSummary, error) {
+	repoDir := filepath.Join(root, encodedRepo)
+	entries, err := os.ReadDir(repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("read repo dir: %w", err)
+	}
+
+	var summaries []SessionSummary
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		sessionID := strings.TrimSuffix(e.Name(), ".jsonl")
+		s, err := peekSession(filepath.Join(repoDir, e.Name()))
+		if err != nil {
+			continue // skip unreadable files
+		}
+		s.SessionID = sessionID
+		summaries = append(summaries, s)
+	}
+
+	sort.Slice(summaries, func(i, j int) bool {
+		return summaries[i].Timestamp.After(summaries[j].Timestamp)
+	})
+	return summaries, nil
+}
+
+// peekSession reads only the first and last record of a JSONL file.
+func peekSession(path string) (SessionSummary, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return SessionSummary{}, err
+	}
+	defer f.Close()
+
+	var summary SessionSummary
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+
+	var lastLine []byte
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		lastLine = append([]byte(nil), line...)
+
+		if summary.Timestamp.IsZero() {
+			var rec map[string]any
+			if err := json.Unmarshal(line, &rec); err != nil {
+				continue
+			}
+			if ts, ok := rec["timestamp"].(string); ok {
+				summary.Timestamp, _ = time.Parse(time.RFC3339, ts)
+			}
+			if cwd, ok := rec["cwd"].(string); ok {
+				summary.CWD = cwd
+			}
+			if branch, ok := rec["gitBranch"].(string); ok {
+				summary.GitBranch = branch
+			}
+			if model, ok := rec["model"].(string); ok {
+				summary.Model = model
+			}
+		}
+	}
+
+	if len(lastLine) > 0 {
+		var rec map[string]any
+		if err := json.Unmarshal(lastLine, &rec); err == nil {
+			if typ, _ := rec["type"].(string); typ == "session_end" {
+				if dur, ok := rec["duration_seconds"].(float64); ok {
+					summary.DurationSec = dur
+				}
+				if files, ok := rec["files_reviewed"].([]any); ok {
+					summary.FilesReviewed = make([]string, 0, len(files))
+					for _, fv := range files {
+						if s, ok := fv.(string); ok {
+							summary.FilesReviewed = append(summary.FilesReviewed, s)
+						}
+					}
+				}
+			}
+		}
+	}
+	summary.FileCount = len(summary.FilesReviewed)
+	return summary, scanner.Err()
+}
+
+// ViewSession holds fully parsed records for one session.
+type ViewSession struct {
+	Summary     SessionSummary
+	TokenUsage  TokenUsageSummary
+	Files       []*FileGroup // ordered by file path
+}
+
+// TokenUsageSummary aggregates estimated token counts across the session.
+type TokenUsageSummary struct {
+	TotalPromptTokens     int
+	TotalCompletionTokens int
+	RequestCount          int
+	FileTokenBreakdown    []FileTokenUsage // populated after parsing
+}
+
+// FileTokenUsage tracks token totals for a single file within a session.
+type FileTokenUsage struct {
+	FilePath        string
+	PromptTokens    int
+	CompletionTokens int
+}
+
+// FileGroup aggregates records for a single file.
+type FileGroup struct {
+	FilePath string
+	Tasks    map[TaskType][]*TaskCard
+}
+
+// TaskType mirrors session.TaskType.
+type TaskType string
+
+const (
+	PlanTask              TaskType = "plan_task"
+	MainTask              TaskType = "main_task"
+	MemoryCompressionTask TaskType = "memory_compression_task"
+)
+
+// TaskCard links an LLM request with its response and tool calls.
+type TaskCard struct {
+	RequestMessages any    // preserved for display
+	RequestNo       int
+	ResponseContent string
+	ToolCalls       []ToolCallInfo
+	DurationMs      int64
+	Error           string
+	Model           string
+	PromptTokens    int
+	CompletionTokens int
+}
+
+// ToolCallInfo summarizes a single tool call.
+type ToolCallInfo struct {
+	Name       string
+	Arguments  string
+	Result     string
+	Ok         bool
+	DurationMs int64
+}
+
+// LoadSession fully parses a JSONL file into a ViewSession.
+func LoadSession(root, encodedRepo, sessionID string) (*ViewSession, error) {
+	path := filepath.Join(root, encodedRepo, sessionID+".jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open session file: %w", err)
+	}
+	defer f.Close()
+
+	vs := &ViewSession{Files: make([]*FileGroup, 0)}
+	fileIndex := make(map[string]*FileGroup)
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 0, 1024*1024)
+	scanner.Buffer(buf, 10*1024*1024)
+
+	for scanner.Scan() {
+		var rec map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+			continue // skip malformed lines
+		}
+		typ, _ := rec["type"].(string)
+
+		switch typ {
+		case "session_start":
+			if ts, ok := rec["timestamp"].(string); ok {
+				vs.Summary.Timestamp, _ = time.Parse(time.RFC3339, ts)
+			}
+			if cwd, ok := rec["cwd"].(string); ok {
+				vs.Summary.CWD = cwd
+			}
+			if branch, ok := rec["gitBranch"].(string); ok {
+				vs.Summary.GitBranch = branch
+			}
+			if model, ok := rec["model"].(string); ok {
+				vs.Summary.Model = model
+			}
+
+		case "llm_request":
+			fp, _ := rec["filePath"].(string)
+			tt, _ := rec["taskType"].(string)
+			reqNo := 0
+			if n, ok := rec["request_no"].(float64); ok {
+				reqNo = int(n)
+			}
+			msgs := rec["messages"]
+
+			tc := &TaskCard{RequestMessages: msgs, RequestNo: reqNo}
+
+			fg := fileIndex[fp]
+			if fg == nil {
+				fg = &FileGroup{FilePath: fp, Tasks: make(map[TaskType][]*TaskCard)}
+				fileIndex[fp] = fg
+				vs.Files = append(vs.Files, fg)
+			}
+			fg.Tasks[TaskType(tt)] = append(fg.Tasks[TaskType(tt)], tc)
+
+		case "llm_response":
+			fp, _ := rec["filePath"].(string)
+			content, _ := rec["content"].(string)
+			durationMs := int64(0)
+			if d, ok := rec["duration_ms"].(float64); ok {
+				durationMs = int64(d)
+			}
+			model, _ := rec["model"].(string)
+			errStr, _ := rec["error"].(string)
+
+			promptTok := 0
+			completionTok := 0
+			if usage, ok := rec["usage"].(map[string]any); ok {
+				if v, ok := usage["prompt_tokens"].(float64); ok {
+					promptTok = int(v)
+				}
+				if v, ok := usage["completion_tokens"].(float64); ok {
+					completionTok = int(v)
+				}
+			}
+
+			tt, _ := rec["taskType"].(string)
+			fg := fileIndex[fp]
+			if fg != nil {
+				cards := fg.Tasks[TaskType(tt)]
+				if len(cards) > 0 && cards[len(cards)-1].ResponseContent == "" {
+					card := cards[len(cards)-1]
+					card.ResponseContent = content
+					card.DurationMs = durationMs
+					card.Model = model
+					card.Error = errStr
+					card.PromptTokens = promptTok
+					card.CompletionTokens = completionTok
+				}
+			}
+
+			// Also attach tool_calls to the same card
+			if tcs, ok := rec["tool_calls"].([]any); ok && fg != nil {
+				tt, _ := rec["taskType"].(string)
+				cards := fg.Tasks[TaskType(tt)]
+				if len(cards) > 0 {
+					card := cards[len(cards)-1]
+					for _, tc := range tcs {
+						if tm, ok := tc.(map[string]any); ok {
+							name, _ := tm["name"].(string)
+							args, _ := tm["arguments"].(string)
+							card.ToolCalls = append(card.ToolCalls, ToolCallInfo{
+								Name: name, Arguments: args,
+							})
+						}
+					}
+				}
+			}
+
+		case "tool_call":
+			result, _ := rec["result"].(string)
+			okVal := true
+			if b, hasOk := rec["ok"].(bool); hasOk {
+				okVal = b
+			}
+			fp, _ := rec["filePath"].(string)
+			tt, _ := rec["taskType"].(string)
+			durationMs := int64(0)
+			if d, ok2 := rec["duration_ms"].(float64); ok2 {
+				durationMs = int64(d)
+			}
+
+			fg := fileIndex[fp]
+			if fg != nil {
+				cards := fg.Tasks[TaskType(tt)]
+				if len(cards) > 0 {
+					card := cards[len(cards)-1]
+					ti := len(card.ToolCalls) - 1
+					if ti >= 0 && card.ToolCalls[ti].Result == "" {
+						card.ToolCalls[ti].Result = result
+						card.ToolCalls[ti].Ok = okVal
+						card.ToolCalls[ti].DurationMs = durationMs
+					}
+				}
+			}
+
+		case "session_end":
+			if dur, ok := rec["duration_seconds"].(float64); ok {
+				vs.Summary.DurationSec = dur
+			}
+			if files, ok := rec["files_reviewed"].([]any); ok {
+				vs.Summary.FilesReviewed = make([]string, 0, len(files))
+				for _, fv := range files {
+					if s, ok2 := fv.(string); ok2 {
+						vs.Summary.FilesReviewed = append(vs.Summary.FilesReviewed, s)
+					}
+				}
+			}
+			vs.Summary.FileCount = len(vs.Summary.FilesReviewed)
+		}
+	}
+
+	// Aggregate token usage across all task cards
+	fileBreakdown := make([]FileTokenUsage, 0, len(vs.Files))
+	for _, fg := range vs.Files {
+		ft := FileTokenUsage{FilePath: fg.FilePath}
+		for _, cards := range fg.Tasks {
+			for _, c := range cards {
+				vs.TokenUsage.TotalPromptTokens += c.PromptTokens
+				vs.TokenUsage.TotalCompletionTokens += c.CompletionTokens
+				if c.ResponseContent != "" || c.PromptTokens > 0 {
+					vs.TokenUsage.RequestCount++
+				}
+				ft.PromptTokens += c.PromptTokens
+				ft.CompletionTokens += c.CompletionTokens
+			}
+		}
+		fileBreakdown = append(fileBreakdown, ft)
+	}
+	sort.Slice(fileBreakdown, func(i, j int) bool {
+		return fileBreakdown[i].PromptTokens+fileBreakdown[i].CompletionTokens > fileBreakdown[j].PromptTokens+fileBreakdown[j].CompletionTokens
+	})
+	vs.TokenUsage.FileTokenBreakdown = fileBreakdown
+
+	sort.Slice(vs.Files, func(i, j int) bool {
+		return vs.Files[i].FilePath < vs.Files[j].FilePath
+	})
+
+	vs.Summary.SessionID = sessionID
+	return vs, scanner.Err()
+}
