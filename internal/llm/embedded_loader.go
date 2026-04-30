@@ -10,10 +10,10 @@ import (
 	tiktoken "github.com/pkoukk/tiktoken-go"
 )
 
-//go:embed embed/*.tiktoken
+//go:embed bpe_data/*.tiktoken
 var embedFS embed.FS
 
-const embedPrefix = "embed/"
+const embedPrefix = "bpe_data/"
 
 // initEmbeddedLoader configures tiktoken to use embedded BPE data instead of fetching from network.
 // Call this once during application startup, before any GetEncoding/EncodingForModel calls.
