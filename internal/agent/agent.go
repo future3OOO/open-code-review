@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/open-code-review/open-code-review/internal/config/allowlist"
 	"github.com/open-code-review/open-code-review/internal/config/rules"
 	"github.com/open-code-review/open-code-review/internal/config/template"
 	"github.com/open-code-review/open-code-review/internal/config/toolsconfig"
@@ -88,15 +89,15 @@ type Args struct {
 
 // Agent orchestrates the AI-powered code review.
 type Agent struct {
-	args            Args
-	diffs           []model.Diff // parsed diffs
-	totalInsertions int64
-	totalDeletions  int64
-	currentDate     string
-	session         *session.SessionHistory
-	totalTokensUsed     int64 // accumulated total tokens from all LLM calls, accessed atomically
-	totalInputTokens    int64 // accumulated input/prompt tokens, accessed atomically
-	totalOutputTokens   int64 // accumulated completion tokens, accessed atomically
+	args              Args
+	diffs             []model.Diff // parsed diffs
+	totalInsertions   int64
+	totalDeletions    int64
+	currentDate       string
+	session           *session.SessionHistory
+	totalTokensUsed   int64 // accumulated total tokens from all LLM calls, accessed atomically
+	totalInputTokens  int64 // accumulated input/prompt tokens, accessed atomically
+	totalOutputTokens int64 // accumulated completion tokens, accessed atomically
 }
 
 // CommentWorkerPool manages a fixed-size pool of workers dedicated to
@@ -181,8 +182,10 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 	telemetry.SetAttr(diffSpan, "lines.deleted", int64(a.totalDeletions))
 	diffSpan.End()
 
+	a.diffs = a.filterUnsupportedExts(a.diffs)
+
 	if len(a.diffs) == 0 {
-		fmt.Println("[ocr] No files changed. Skipping review.")
+		fmt.Println("[ocr] No supported files changed. Skipping review.")
 		telemetry.Event(ctx, "no.files.changed")
 		a.session.Finalize()
 		return nil, nil
@@ -477,6 +480,44 @@ func (a *Agent) filterLargeDiffs(diffs []model.Diff) []model.Diff {
 		fmt.Printf("[ocr] Pre-filtered %d file(s) exceeding 80%% token threshold\n", skipped)
 	}
 	return kept
+}
+
+// filterUnsupportedExts drops diffs whose file extensions are not in the supported types allowlist.
+func (a *Agent) filterUnsupportedExts(diffs []model.Diff) []model.Diff {
+	var kept []model.Diff
+	skipped := 0
+
+	for _, d := range diffs {
+		path := d.NewPath
+		if path == "/dev/null" {
+			path = d.OldPath
+		}
+		ext := a.extFromPath(path)
+		if ext != "" && !allowedext.IsAllowedExt(ext) {
+			fmt.Printf("[ocr] Skipping %s — extension %q not in supported file types\n", d.NewPath, ext)
+			skipped++
+			continue
+		}
+		kept = append(kept, d)
+	}
+
+	if skipped > 0 {
+		fmt.Printf("[ocr] Skipped %d file(s) with unsupported extensions\n", skipped)
+	}
+	return kept
+}
+
+// extFromPath returns the file extension with leading dot, lowercased.
+func (a *Agent) extFromPath(path string) string {
+	basename := path
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		basename = path[idx+1:]
+	}
+	dot := strings.LastIndex(basename, ".")
+	if dot <= 0 {
+		return ""
+	}
+	return strings.ToLower(basename[dot:])
 }
 
 // executePlanPhase runs the plan task for a single file, sending template messages
@@ -857,4 +898,3 @@ func detectGitBranch(repoDir string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
-
