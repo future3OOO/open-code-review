@@ -12,6 +12,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/open-code-review/open-code-review/internal/stdout"
 )
 
 // Event emits a structured event as a span with immediate end.
@@ -62,10 +64,10 @@ func FormatDuration(dur time.Duration) string {
 // PrintTraceSummary prints a one-line summary of the review to stdout.
 func PrintTraceSummary(filesReviewed, commentsGenerated int64, inputTokens, outputTokens, totalTokens int64, duration time.Duration) {
 	if inputTokens > 0 || outputTokens > 0 {
-		fmt.Printf("[ocr] Summary: %d file(s) reviewed, %d comment(s), ~%d token(s) used (input: ~%d, output: ~%d), %s elapsed\n",
+		fmt.Fprintf(stdout.Writer(), "[ocr] Summary: %d file(s) reviewed, %d comment(s), ~%d token(s) used (input: ~%d, output: ~%d), %s elapsed\n",
 			filesReviewed, commentsGenerated, totalTokens, inputTokens, outputTokens, FormatDuration(duration))
 	} else {
-		fmt.Printf("[ocr] Summary: %d file(s) reviewed, %d comment(s), ~%d token(s) used, %s elapsed\n",
+		fmt.Fprintf(stdout.Writer(), "[ocr] Summary: %d file(s) reviewed, %d comment(s), ~%d token(s) used, %s elapsed\n",
 			filesReviewed, commentsGenerated, totalTokens, FormatDuration(duration))
 	}
 }
@@ -76,16 +78,16 @@ func PrintTraceSummary(filesReviewed, commentsGenerated int64, inputTokens, outp
 func PrintToolCallStarted(toolName string, args map[string]any) {
 	summary := summarizeArgs(args)
 	if summary != "" {
-		fmt.Printf("[ocr]   ▶ %s %s\n", toolName, summary)
+		fmt.Fprintf(stdout.Writer(), "[ocr]   ▶ %s %s\n", toolName, summary)
 	} else {
-		fmt.Printf("[ocr]   ▶ %s\n", toolName)
+		fmt.Fprintf(stdout.Writer(), "[ocr]   ▶ %s\n", toolName)
 	}
 }
 
 // PrintToolCallFinished prints a line when a tool finishes successfully.
 // Example: [ocr]   ✔ file_read "internal/config/rules/loader.go" (12ms)
 func PrintToolCallFinished(toolName string, dur time.Duration) {
-	fmt.Printf("[ocr]   ✔ %s (%s)\n", toolName, FormatDuration(dur))
+	fmt.Fprintf(stdout.Writer(), "[ocr]   ✔ %s (%s)\n", toolName, FormatDuration(dur))
 }
 
 // PrintToolCallError prints a line when a tool fails.

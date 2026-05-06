@@ -17,6 +17,8 @@ import (
 	"time"
 
 	tiktoken "github.com/pkoukk/tiktoken-go"
+
+	"github.com/open-code-review/open-code-review/internal/stdout"
 )
 
 const maxRetries = 10 // Maximum number of retry attempts with exponential backoff.
@@ -459,7 +461,7 @@ func sleepWithBackoff(attempt int) {
 	jitter := time.Duration(rand.Int63n(int64(delay))) - delay/2
 	delay += jitter
 
-	fmt.Printf("[llm] Retrying in %v (attempt info)... \n", delay)
+	fmt.Fprintf(stdout.Writer(), "[llm] Retrying in %v (attempt info)... \n", delay)
 	time.Sleep(delay)
 }
 

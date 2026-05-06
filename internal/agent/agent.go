@@ -18,6 +18,7 @@ import (
 	"github.com/open-code-review/open-code-review/internal/llm"
 	"github.com/open-code-review/open-code-review/internal/model"
 	"github.com/open-code-review/open-code-review/internal/session"
+	"github.com/open-code-review/open-code-review/internal/stdout"
 	"github.com/open-code-review/open-code-review/internal/telemetry"
 	"github.com/open-code-review/open-code-review/internal/tool"
 )
@@ -137,7 +138,7 @@ func (p *CommentWorkerPool) Submit(f func() ([]model.LlmComment, error)) {
 
 		comments, err := f()
 		if err != nil {
-			fmt.Printf("[ocr] CommentWorkerPool error: %v\n", err)
+			fmt.Fprintf(stdout.Writer(), "[ocr] CommentWorkerPool error: %v\n", err)
 		}
 		p.resultsMu.Lock()
 		p.results = append(p.results, comments...)
@@ -185,7 +186,7 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 	a.diffs = a.filterUnsupportedExts(a.diffs)
 
 	if len(a.diffs) == 0 {
-		fmt.Println("[ocr] No supported files changed. Skipping review.")
+		fmt.Fprintln(stdout.Writer(), "[ocr] No supported files changed. Skipping review.")
 		telemetry.Event(ctx, "no.files.changed")
 		a.session.Finalize()
 		return nil, nil
@@ -193,7 +194,7 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 
 	a.currentDate = time.Now().Format("2006-01-02 15:04")
 
-	fmt.Printf("[ocr] Reviewing %d file(s) in %s\n", len(a.diffs), a.args.RepoDir)
+	fmt.Fprintf(stdout.Writer(), "[ocr] Reviewing %d file(s) in %s\n", len(a.diffs), a.args.RepoDir)
 	telemetry.Event(ctx, "review.started",
 		telemetry.AnyToAttr("file.count", len(a.diffs)),
 		telemetry.AnyToAttr("repo.dir", a.args.RepoDir))
@@ -323,7 +324,7 @@ func (a *Agent) dispatchSubtasks(ctx context.Context) ([]model.LlmComment, error
 			}
 
 			if err := a.executeSubtask(fileCtx, d); err != nil {
-				fmt.Printf("[ocr] Subtask error for %s: %v\n", d.NewPath, err)
+				fmt.Fprintf(stdout.Writer(), "[ocr] Subtask error for %s: %v\n", d.NewPath, err)
 				telemetry.ErrorEvent(fileCtx, "subtask.error", err,
 					telemetry.AnyToAttr("file.path", d.NewPath))
 			}
@@ -365,7 +366,7 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) error {
 	// Phase 1: Plan (skip when changes are below threshold)
 	var planResult string
 	if a.args.Template.PlanTask != nil && len(a.args.Template.PlanTask.Messages) > 0 && threshold > 0 && changeLines < int64(threshold) {
-		fmt.Printf("[ocr] Skipping plan phase for %s (%d lines < threshold %d)\n", newPath, changeLines, threshold)
+		fmt.Fprintf(stdout.Writer(), "[ocr] Skipping plan phase for %s (%d lines < threshold %d)\n", newPath, changeLines, threshold)
 		telemetry.Event(ctx, "plan.skipped",
 			telemetry.AnyToAttr("file.path", newPath),
 			telemetry.AnyToAttr("lines.changed", changeLines),
@@ -374,7 +375,7 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) error {
 		var err error
 		planResult, err = a.executePlanPhase(ctx, newPath, d.Diff, changeFilesExcludingCurrent, rule)
 		if err != nil {
-			fmt.Printf("[ocr] Plan phase failed for %s: %v (continuing without plan)\n", newPath, err)
+			fmt.Fprintf(stdout.Writer(), "[ocr] Plan phase failed for %s: %v (continuing without plan)\n", newPath, err)
 			telemetry.Eventf(ctx, "plan.failed", err.Error(),
 				telemetry.AnyToAttr("file.path", newPath))
 			planResult = ""
@@ -405,7 +406,7 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) error {
 
 	tokenCount := countMessagesTokens(messages)
 	if tokenCount > a.args.Template.TokenWarningThreshold {
-		fmt.Printf("[ocr] WARNING: prompt tokens (%d) exceed threshold (%d) for %s\n",
+		fmt.Fprintf(stdout.Writer(), "[ocr] WARNING: prompt tokens (%d) exceed threshold (%d) for %s\n",
 			tokenCount, a.args.Template.TokenWarningThreshold, newPath)
 		telemetry.Event(ctx, "token.threshold.exceeded",
 			telemetry.AnyToAttr("file.path", newPath),
@@ -468,7 +469,7 @@ func (a *Agent) filterLargeDiffs(diffs []model.Diff) []model.Diff {
 	for _, d := range diffs {
 		tokens := llm.CountTokens(d.Diff)
 		if float64(tokens) > limit {
-			fmt.Printf("[ocr] Skipping %s (~%d tokens exceeds 80%% of threshold %d)\n",
+			fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s (~%d tokens exceeds 80%% of threshold %d)\n",
 				d.NewPath, tokens, threshold)
 			skipped++
 			continue
@@ -477,7 +478,7 @@ func (a *Agent) filterLargeDiffs(diffs []model.Diff) []model.Diff {
 	}
 
 	if skipped > 0 {
-		fmt.Printf("[ocr] Pre-filtered %d file(s) exceeding 80%% token threshold\n", skipped)
+		fmt.Fprintf(stdout.Writer(), "[ocr] Pre-filtered %d file(s) exceeding 80%% token threshold\n", skipped)
 	}
 	return kept
 }
@@ -494,7 +495,7 @@ func (a *Agent) filterUnsupportedExts(diffs []model.Diff) []model.Diff {
 		}
 		ext := a.extFromPath(path)
 		if ext != "" && !allowedext.IsAllowedExt(ext) {
-			fmt.Printf("[ocr] Skipping %s — extension %q not in supported file types\n", d.NewPath, ext)
+			fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s — extension %q not in supported file types\n", d.NewPath, ext)
 			skipped++
 			continue
 		}
@@ -502,7 +503,7 @@ func (a *Agent) filterUnsupportedExts(diffs []model.Diff) []model.Diff {
 	}
 
 	if skipped > 0 {
-		fmt.Printf("[ocr] Skipped %d file(s) with unsupported extensions\n", skipped)
+		fmt.Fprintf(stdout.Writer(), "[ocr] Skipped %d file(s) with unsupported extensions\n", skipped)
 	}
 	return kept
 }
@@ -551,7 +552,7 @@ func (a *Agent) executePlanPhase(ctx context.Context, newPath, rawDiff, changeFi
 		atomic.AddInt64(&a.totalInputTokens, int64(resp.Usage.PromptTokens+resp.Usage.CacheReadTokens))
 		atomic.AddInt64(&a.totalOutputTokens, int64(resp.Usage.CompletionTokens+resp.Usage.CacheWriteTokens))
 	}
-	fmt.Printf("[ocr] Plan completed for %s\n", newPath)
+	fmt.Fprintf(stdout.Writer(), "[ocr] Plan completed for %s\n", newPath)
 	return resp.Content(), nil
 }
 
@@ -639,7 +640,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 
 		if len(calls) == 0 {
 			// No tool calls - remind the model
-			fmt.Printf("[ocr] No tool calls parsed for %s, retrying...\n", newPath)
+			fmt.Fprintf(stdout.Writer(), "[ocr] No tool calls parsed for %s, retrying...\n", newPath)
 			messages = append(messages, llm.NewTextMessage("user", "You did not successfully call any tools. Please try again or use task_done if finished."))
 			if content != "" {
 				messages = append(messages[:len(messages)-1], llm.NewTextMessage("assistant", content), messages[len(messages)-1])
@@ -680,19 +681,19 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 			break
 		}
 		if !hasValidResult {
-			fmt.Printf("[ocr] No valid tool results for %s, stopping.\n", newPath)
+			fmt.Fprintf(stdout.Writer(), "[ocr] No valid tool results for %s, stopping.\n", newPath)
 			break
 		}
 
 		succeed := a.addNextMessage(content, calls, results, &messages, newPath)
 		if !succeed {
-			fmt.Printf("[ocr] Context compression exceeded threshold for %s, stopping.\n", newPath)
+			fmt.Fprintf(stdout.Writer(), "[ocr] Context compression exceeded threshold for %s, stopping.\n", newPath)
 			break
 		}
 	}
 
 	if toolReqCount <= 0 {
-		fmt.Printf("[ocr] Max tool requests reached for %s.\n", newPath)
+		fmt.Fprintf(stdout.Writer(), "[ocr] Max tool requests reached for %s.\n", newPath)
 	}
 
 	return nil
@@ -818,7 +819,7 @@ func BuildToolDefs(entries []toolsconfig.ToolConfigEntry, planOnly bool) []llm.T
 		}
 		var fn llm.FunctionDef
 		if err := json.Unmarshal(defRaw, &fn); err != nil {
-			fmt.Printf("[ocr] WARNING: failed to parse tool definition %q: %v\n", e.Name, err)
+			fmt.Fprintf(stdout.Writer(), "[ocr] WARNING: failed to parse tool definition %q: %v\n", e.Name, err)
 			continue
 		}
 		defs = append(defs, llm.ToolDef{
@@ -850,7 +851,7 @@ func (a *Agent) compressAndRecord(msgs []llm.Message, filePath string) []llm.Mes
 	rec := fs.AppendTaskRecord(session.MemoryCompressionTask, compressionMsgs)
 	if err != nil {
 		rec.SetError(err, duration)
-		fmt.Printf("[ocr] Memory compression failed: %v\n", err)
+		fmt.Fprintf(stdout.Writer(), "[ocr] Memory compression failed: %v\n", err)
 		return msgs[:2]
 	}
 	rec.SetResponse(resp, duration)

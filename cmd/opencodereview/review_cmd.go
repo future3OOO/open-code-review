@@ -13,6 +13,7 @@ import (
 	"github.com/open-code-review/open-code-review/internal/config/template"
 	"github.com/open-code-review/open-code-review/internal/config/toolsconfig"
 	"github.com/open-code-review/open-code-review/internal/llm"
+	"github.com/open-code-review/open-code-review/internal/stdout"
 	"github.com/open-code-review/open-code-review/internal/telemetry"
 	"github.com/open-code-review/open-code-review/internal/tool"
 )
@@ -107,6 +108,11 @@ func runReview(args []string) error {
 		Model:                 model,
 	})
 
+	// Silence progress output in JSON mode so stdout stays clean.
+	if opts.outputFormat == "json" {
+		defer stdout.Quiet()()
+	}
+
 	ctx, span := telemetry.StartSpan(context.Background(), "review.run")
 	defer span.End()
 	startTime := time.Now()
@@ -126,6 +132,7 @@ func runReview(args []string) error {
 	if len(comments) > 0 {
 		telemetry.RecordCommentsGenerated(ctx, int64(len(comments)))
 	}
+
 	telemetry.PrintTraceSummary(ag.FilesReviewed(), int64(len(comments)), ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(), duration)
 
 	if opts.outputFormat == "json" {
