@@ -58,6 +58,7 @@ func ResolveLineNumbers(comments []model.LlmComment, diffs []model.Diff) []model
 // against "from" side lines (context + deleted) in the diff hunks.
 // Returns true on success (comments fields are mutated in place).
 func resolveFromHunk(d *model.Diff, cm *model.LlmComment) bool {
+	// TODO: re-track with llm
 	hunks := ParseHunks(d.Diff)
 	if len(hunks) == 0 {
 		return false
