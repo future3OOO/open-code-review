@@ -1,31 +1,25 @@
 #!/usr/bin/env bash
 #
-# release.sh — Build all platform binaries and push to Alibaba Cloud OSS
+# release.sh — Build all platform binaries and publish to internal-release repo
 #
 # Usage:
 #   ./scripts/release.sh              # Builds using latest git tag as version
 #   ./scripts/release.sh v0.1.0       # Explicit version tag
 #
 # Prerequisites:
-#   - ossutil configured (run: ossutil config)
 #   - Git tag exists for the version (or pass version explicitly)
 #   - Go 1.25+ installed
+#   - ~/internal-release repo exists with a writable bin/ directory
 #
 # Environment variables:
-#   OSS_ENDPOINT      OSS endpoint URL (default: oss-cn-hangzhou.aliyuncs.com)
-#   OSS_BUCKET        Bucket name override
-#   OSS_PREFIX        Path prefix within bucket (default: opencodereview-cli)
+#   OCR_INTERNAL_RELEASE   Override the default path to internal-release repo
+#                          (default: $HOME/internal-release)
 #
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-ENDPOINT="${OSS_ENDPOINT:-oss-cn-hangzhou.aliyuncs.com}"
-BUCKET="${OSS_BUCKET:-git.cn-hangzhou}"
-PREFIX="${OSS_PREFIX:-opencodereview-cli}"
-OSS_PATH="oss://${BUCKET}/${PREFIX}"
 
 info()  { echo "[INFO]  $*"; }
 warn()  { echo "[WARN]  $*"; }
@@ -47,11 +41,7 @@ fi
 info "=== OpenCodeReview Release: ${VERSION} ==="
 
 # ── Pre-flight checks ────────────────────────────────────────────────────────
-check_prereq() {
-    command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not installed."
-}
-check_prereq go
-check_prereq ossutil
+command -v go >/dev/null 2>&1 || die "'go' is required but not installed."
 
 cd "$PROJECT_ROOT"
 if [ -n "$(git status --porcelain)" ]; then
@@ -87,62 +77,46 @@ for pair in "${TARGETS[@]}"; do
         ./cmd/opencodereview
 done
 
-# ── Generate per-version checksum file ───────────────────────────────────────
-CHECKSUM_FILE="${DIST_DIR}/sha256sum-${VERSION}.txt"
+# ── Publish to internal release repo ────────────────────────────────────────
+INTERNAL_ROOT="${OCR_INTERNAL_RELEASE:-$HOME/internal-release}"
+[ -d "$INTERNAL_ROOT" ] || die "internal-release repo not found at ${INTERNAL_ROOT}"
 
-info "Generating checksums: sha256sum-${VERSION}.txt"
-(cd "$DIST_DIR" && shasum -a 256 opencodereview-"${VERSION}"-* | sort > "sha256sum-${VERSION}.txt")
+BIN_DIR="${INTERNAL_ROOT}/bin"
+VERSION_DIR="${BIN_DIR}/${VERSION}"
 
-info "Checksum contents:"
-cat "$CHECKSUM_FILE" | while read -r line; do echo "    $line"; done
-
-# ── Upload to OSS ────────────────────────────────────────────────────────────
 info ""
-info "Uploading to ${OSS_PATH} ..."
+info "Publishing to ${INTERNAL_ROOT} ..."
+
+# Create versioned directory, clean old files if re-publishing same version
+mkdir -p "$VERSION_DIR"
+rm -f "$VERSION_DIR"/*
 
 for f in "${DIST_DIR}"/opencodereview-"${VERSION}"-*; do
-    BASENAME="$(basename "$f")"
-    [[ "$BASENAME" == sha256sum-* ]] && continue
-    info "  Uploading ${BASENAME} ..."
-    ossutil cp "$f" "${OSS_PATH}/${BASENAME}" \
-        --endpoint "$ENDPOINT" \
-        --acl public-read \
-        --meta "Cache-Control:max-age=31536000"
+    SRC_BASENAME="$(basename "$f")"
+    # Strip version prefix to get canonical name: opencodereview-v0.1.0-darwin-arm64 → opencodereview-darwin-arm64
+    TARGET_NAME="${SRC_BASENAME/opencodereview-${VERSION}-/opencodereview-}"
+    info "  ${TARGET_NAME}"
+    cp "$f" "$VERSION_DIR/${TARGET_NAME}"
 done
 
-info "  Uploading sha256sum-${VERSION}.txt ..."
-ossutil cp "$CHECKSUM_FILE" "${OSS_PATH}/sha256sum-${VERSION}.txt" \
-    --endpoint "$ENDPOINT" \
-    --acl public-read
+# Generate checksum using final filenames (without version in filename)
+(cd "$VERSION_DIR" && shasum -a 256 opencodereview-* | sort > sha256sum.txt)
+info "  sha256sum.txt written"
 
-info "  Uploading install.sh ..."
-ossutil cp "${SCRIPT_DIR}/install.sh" "${OSS_PATH}/install.sh" \
-    --endpoint "$ENDPOINT" \
-    --acl public-read \
-    --meta "Content-Type:text/x-sh"
+# Append version to VERSION file (last line = latest)
+printf "%s\n" "$VERSION" >> "${INTERNAL_ROOT}/VERSION"
+info "  VERSION entry appended"
 
-echo -n "$VERSION" > "${DIST_DIR}/VERSION"
-info "  Uploading VERSION sentinel ..."
-ossutil cp "${DIST_DIR}/VERSION" "${OSS_PATH}/VERSION" \
-    --endpoint "$ENDPOINT" \
-    --acl public-read \
-    --meta "Cache-Control:no-cache"
+# ── Commit and push ──────────────────────────────────────────────────────────
+cd "$INTERNAL_ROOT"
 
-# ── Summary ──────────────────────────────────────────────────────────────────
-CDN_URL="https://${BUCKET}.oss-cdn.aliyuncs.com/${PREFIX}"
+git add -A
 
-info ""
-info "=== Release ${VERSION} published ==="
-info ""
-info "Install (latest):"
-info "  curl -fsSL ${CDN_URL}/install.sh | sh"
-info ""
-info "Pinned install:"
-info "  OCR_VERSION=${VERSION} curl -fsSL ${CDN_URL}/install.sh | sh"
-info ""
-info "Direct downloads:"
-for pair in "${TARGETS[@]}"; do
-    GOOS="${pair%/*}"
-    GOARCH="${pair#*/}"
-    info "  ${CDN_URL}/opencodereview-${VERSION}-${GOOS}-${GOARCH}"
-done
+if [ -n "$(git status --porcelain)" ]; then
+    git commit -m "release: opencodereview ${VERSION}"
+    git push
+    info ""
+    info "=== Release ${VERSION} published ==="
+else
+    info "No new changes to commit — binaries unchanged."
+fi
