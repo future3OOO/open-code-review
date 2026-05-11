@@ -109,9 +109,15 @@ func runReview(args []string) error {
 		Model:                 model,
 	})
 
-	// Silence progress output in JSON mode so stdout stays clean.
-	if opts.outputFormat == "json" {
-		defer stdout.Quiet()()
+	// Silence progress output during execution; restore before Summary in agent mode.
+	var unsilence func()
+	if opts.outputFormat == "json" || opts.audience == "agent" {
+		unsilence = stdout.Quiet()
+		defer func() {
+			if unsilence != nil {
+				unsilence()
+			}
+		}()
 	}
 
 	ctx, span := telemetry.StartSpan(context.Background(), "review.run")
@@ -139,10 +145,24 @@ func runReview(args []string) error {
 		return outputJSONNoFiles()
 	}
 
+	// In agent mode, restore stdout so Summary reaches the terminal.
+	if opts.audience == "agent" && unsilence != nil {
+		unsilence()
+		unsilence = nil
+	}
+
 	telemetry.PrintTraceSummary(ag.FilesReviewed(), int64(len(comments)), ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(), duration)
 
 	if opts.outputFormat == "json" {
 		return outputJSONWithWarnings(comments, ag.Warnings())
+	}
+	if opts.audience == "agent" {
+		if len(comments) == 0 {
+			fmt.Println("No comments generated.")
+		} else {
+			fmt.Printf("%d comment(s) generated.\n", len(comments))
+		}
+		return nil
 	}
 	outputTextWithWarnings(comments, ag.Warnings())
 

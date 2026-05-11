@@ -101,6 +101,7 @@ type reviewOptions struct {
 	to             string
 	commit         string
 	outputFormat   string
+	audience       string // --audience: "human" (default) or "agent"
 	concurrency    int
 	perFileTimeout int
 	showHelp       bool
@@ -120,6 +121,7 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	a.StringVarP(&opts.outputFormat, "format", "f", "text", "output format: text or json")
 	a.IntVar(&opts.concurrency, "concurrency", 8, "max concurrent file reviews")
 	a.IntVar(&opts.perFileTimeout, "timeout", 10, "per-file timeout in minutes")
+	a.StringVar(&opts.audience, "audience", "human", "output audience: human (show progress) or agent (summary only)")
 
 	if err := a.Parse(args); err != nil {
 		return opts, fmt.Errorf("parse flags: %w", err)
@@ -143,6 +145,12 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	}
 	if opts.from != "" && opts.to == "" {
 		return opts, fmt.Errorf("--to is required when --from is specified")
+	}
+
+	switch opts.audience {
+	case "human", "agent":
+	default:
+		return opts, fmt.Errorf("invalid --audience value %q: must be 'human' or 'agent'", opts.audience)
 	}
 
 	return opts, nil
@@ -170,6 +178,9 @@ Examples:
   ocr review --format json
   ocr review -f json
 
+  # Agent mode (summary only, no progress lines)
+  ocr review --audience agent
+
 Flags:`)
 	fs := flag.NewFlagSet("print", flag.ContinueOnError)
 	var d reviewOptions
@@ -180,6 +191,7 @@ Flags:`)
 	fs.StringVar(&d.commit, "commit", "", "single commit hash or tag to review (vs its parent) (shorthand: -c)")
 	fs.IntVar(&d.concurrency, "concurrency", 8, "max concurrent file reviews")
 	fs.IntVar(&d.perFileTimeout, "timeout", 10, "per-file timeout in minutes")
+	fs.StringVar(&d.audience, "audience", "human", "output audience: human (show progress) or agent (summary only)")
 	fs.PrintDefaults()
 }
 
