@@ -770,14 +770,21 @@ func (c *AnthropicClient) parseResponse(body []byte, headers http.Header) (*Chat
 		Input any    `json:"input,omitempty"`
 	}
 
+	type anthropicUsageRaw struct {
+		InputTokens              int64 `json:"input_tokens"`
+		OutputTokens             int64 `json:"output_tokens"`
+		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	}
+
 	var resp struct {
-		ID      string               `json:"id"`
-		Model   string               `json:"model"`
-		Type    string               `json:"type"`
-		Role    string               `json:"role"`
-		Content []contentBlockResp   `json:"content"`
-		Usage   *UsageInfo           `json:"usage"`
-		StopReason string            `json:"stop_reason,omitempty"`
+		ID         string              `json:"id"`
+		Model      string              `json:"model"`
+		Type       string              `json:"type"`
+		Role       string              `json:"role"`
+		Content    []contentBlockResp  `json:"content"`
+		Usage      anthropicUsageRaw   `json:"usage"`
+		StopReason string              `json:"stop_reason,omitempty"`
 	}
 
 	if err := json.Unmarshal(body, &resp); err != nil {
@@ -816,6 +823,17 @@ func (c *AnthropicClient) parseResponse(body []byte, headers http.Header) (*Chat
 		finishReason = "stop"
 	}
 
+	var usage *UsageInfo
+	if u := resp.Usage; u.InputTokens > 0 || u.OutputTokens > 0 {
+		usage = &UsageInfo{
+			PromptTokens:     u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens,
+			CompletionTokens: u.OutputTokens,
+			CacheReadTokens:  u.CacheReadInputTokens,
+			CacheWriteTokens: u.CacheCreationInputTokens,
+		}
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+
 	return &ChatResponse{
 		ID:    resp.ID,
 		Model: resp.Model,
@@ -828,7 +846,7 @@ func (c *AnthropicClient) parseResponse(body []byte, headers http.Header) (*Chat
 			FinishReason: finishReason,
 		}},
 		Headers: headers,
-		Usage:   resp.Usage,
+		Usage:   usage,
 	}, nil
 }
 
