@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# copy-to-internal-repo.sh — Upload artifacts to internal-release repo.
+# copy-to-internal-repo.sh — Upload artifacts to internal-release repo via temp clone.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,29 +10,32 @@ PROJECT_ROOT="$(resolve_project_root)"
 VERSION_TAG="${VERSION_TAG:?VERSION_TAG is required}"
 NPM_VERSION="${NPM_VERSION:-$(npm_version_from_tag "$VERSION_TAG")}"
 
-INTERNAL_ROOT="${OCR_INTERNAL_RELEASE:-$HOME/internal-release}"
-BIN_DIR="${INTERNAL_ROOT}/bin"
-VERSION_BIN_DIR="${BIN_DIR}/${VERSION_TAG}"
-
 DIST_DIR="${PROJECT_ROOT}/dist"
 
-# ── Ensure internal-release repo exists and is up to date ───────────────────
-ensure_internal_repo() {
-    if [ -d "$INTERNAL_ROOT/.git" ]; then
-        info "Pulling latest from internal-release repo..."
-        (cd "$INTERNAL_ROOT" && git pull --rebase origin master 2>/dev/null || git pull --rebase)
-    else
-        info "Cloning internal-release repo to ${INTERNAL_ROOT}..."
-        mkdir -p "$(dirname "$INTERNAL_ROOT")"
-        git clone git@gitlab.alibaba-inc.com:open-code-review/internal-release.git "$INTERNAL_ROOT"
+# ── Temp clone lifecycle ─────────────────────────────────────────────────────
+TMP_REPO=""
+
+cleanup_tmp_repo() {
+    if [ -n "$TMP_REPO" ] && [ -d "$TMP_REPO" ]; then
+        rm -rf "$TMP_REPO"
+        info "Cleaned up temporary clone."
     fi
-    success "internal-release repo ready"
+}
+trap cleanup_tmp_repo EXIT INT TERM
+
+setup_temp_clone() {
+    TMP_REPO=$(mktemp -d -t "ocr-internal-repo.XXXXXX")
+    info "Cloning internal-release repo to temp directory..."
+    git clone --depth 1 git@gitlab.alibaba-inc.com:open-code-review/internal-release.git "$TMP_REPO"
+    success "Temp clone ready at ${TMP_REPO}"
 }
 
 # ── Copy binaries and generate checksums ─────────────────────────────────────
+BIN_DIR="${TMP_REPO}/bin"
+VERSION_BIN_DIR="${BIN_DIR}/${VERSION_TAG}"
+
 copy_artifacts() {
     mkdir -p "$VERSION_BIN_DIR"
-    rm -f "$VERSION_BIN_DIR"/opencodereview-*
 
     local count=0
     for f in "$DIST_DIR"/opencodereview-${VERSION_TAG}-*; do
@@ -59,18 +62,22 @@ generate_checksums() {
 }
 
 update_version_file() {
-    local last_line
-    last_line=$(tail -1 "$INTERNAL_ROOT/VERSION" 2>/dev/null || true)
-    if [ "$last_line" != "$VERSION_TAG" ]; then
-        printf "%s\n" "$VERSION_TAG" >> "$INTERNAL_ROOT/VERSION"
-        info "VERSION file updated (added ${VERSION_TAG})"
-    else
-        info "VERSION file already ends with ${VERSION_TAG}, skipping append"
+    local version_file="${TMP_REPO}/VERSION"
+    # Only add version if it's not already the last line
+    if [ -f "$version_file" ]; then
+        local last_line
+        last_line=$(tail -1 "$version_file" 2>/dev/null || true)
+        if [ "$last_line" = "$VERSION_TAG" ]; then
+            info "VERSION file already ends with ${VERSION_TAG}, skipping."
+            return 0
+        fi
     fi
+    printf "%s\n" "$VERSION_TAG" >> "$version_file"
+    info "VERSION file updated (added ${VERSION_TAG})"
 }
 
 commit_and_push() {
-    cd "$INTERNAL_ROOT"
+    cd "$TMP_REPO"
 
     git add -A
 
@@ -80,6 +87,8 @@ commit_and_push() {
     fi
 
     info "Committing to internal-release repo..."
+    git config user.name "open-code-review-bot"
+    git config user.email "bot@open-code-review.local"
     git commit -m "release: opencodereview ${VERSION_TAG} (npm ${NPM_VERSION})"
     git push origin master 2>/dev/null || git push
     success "Pushed to internal-release repo"
@@ -88,10 +97,9 @@ commit_and_push() {
 # ── Execution ────────────────────────────────────────────────────────────────
 info "=== Publishing artifacts to internal-release repo ==="
 info "Version: ${VERSION_TAG}"
-info "Target: ${INTERNAL_ROOT}"
 echo ""
 
-ensure_internal_repo
+setup_temp_clone
 copy_artifacts
 generate_checksums
 update_version_file
