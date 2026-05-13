@@ -12,7 +12,7 @@
 
 - 已安装 `go`、`jq`、`tnpm`、`shasum`
 - 已通过 `tnpm login` 登录内部 npm registry
-- 已打 git tag（如 `git tag v0.1.2 && git push origin --tags`）
+- 已打 git tag（如 `git tag -a v0.1.2 -m "v0.1.2" && git push origin --tags`）
 - 工作树干净（无未提交变更）
 
 ## 用法
