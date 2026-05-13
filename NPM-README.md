@@ -133,3 +133,12 @@ Apache-2.0
 - feat: 改名 (2f2aaa1)
 - feat: argus 改名 opencodereview (3d2029d)
 - feat: 修复了一些问题 (9e449d5)
+
+---
+
+## Changelog v0.1.3 (2026-05-13)
+
+- feat: remove deprecated sh (0ec83ae)
+- feat: 为 llm test 增加来源和 url (f40872f)
+- chore(release): bump version to v0.1.2 (92c4119)
+- feat: fix bug (d9f9cb3)
