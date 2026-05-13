@@ -77,7 +77,9 @@ func runLLMTest() error {
 	if resp.Model != "" {
 		model = resp.Model
 	}
-	fmt.Printf("Model: %s\n", model)
+	fmt.Printf("Source: %s\n", ep.Source)
+	fmt.Printf("URL:    %s\n", ep.URL)
+	fmt.Printf("Model:  %s\n", model)
 	fmt.Printf("%s\n", resp.Content())
 	return nil
 }

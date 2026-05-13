@@ -15,6 +15,7 @@ type ResolvedEndpoint struct {
 	Token    string
 	Model    string
 	Protocol string // "anthropic" or "openai"
+	Source   string // human-readable config source label
 }
 
 // Environment variable names for OCR-specific configuration.
@@ -52,6 +53,7 @@ func ResolveEndpoint(configPath string) (ResolvedEndpoint, error) {
 			return ResolvedEndpoint{}, fmt.Errorf("resolve %s: %w", s.name, err)
 		}
 		if ok && ep.URL != "" && ep.Token != "" && ep.Model != "" {
+			ep.Source = s.name
 			return ep, nil
 		}
 	}
@@ -79,7 +81,7 @@ func tryOCREnv() (ResolvedEndpoint, bool, error) {
 		protocol = "openai"
 	}
 
-	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: protocol}, true, nil
+	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: protocol, Source: "OCR environment"}, true, nil
 }
 
 // llmFileConfig represents the llm section in config.json.
@@ -123,7 +125,7 @@ func tryOCRConfig(path string) (ResolvedEndpoint, bool, error) {
 		protocol = "openai"
 	}
 
-	return ResolvedEndpoint{URL: cfg.Llm.URL, Token: cfg.Llm.AuthToken, Model: cfg.Llm.Model, Protocol: protocol}, true, nil
+	return ResolvedEndpoint{URL: cfg.Llm.URL, Token: cfg.Llm.AuthToken, Model: cfg.Llm.Model, Protocol: protocol, Source: "OCR config file"}, true, nil
 }
 
 // tryCCEnv reads Claude Code environment variables.
@@ -137,7 +139,7 @@ func tryCCEnv() (ResolvedEndpoint, bool, error) {
 
 	url := ensureMessagesSuffix(baseURL)
 
-	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: "anthropic"}, true, nil
+	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: "anthropic", Source: "Claude Code environment"}, true, nil
 }
 
 // tryShellRC parses ~/.zshrc and ~/.bashrc for ANTHROPIC_* exports.
@@ -213,7 +215,7 @@ func parseShellRC(path string) (ResolvedEndpoint, bool, error) {
 
 	url := ensureMessagesSuffix(baseURL)
 
-	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: "anthropic"}, true, nil
+	return ResolvedEndpoint{URL: url, Token: token, Model: model, Protocol: "anthropic", Source: "Shell rc file"}, true, nil
 }
 
 // ensureMessagesSuffix appends /v1/messages to base URLs that lack a versioned path.
