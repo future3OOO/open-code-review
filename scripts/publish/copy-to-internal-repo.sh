@@ -30,9 +30,9 @@ setup_temp_clone() {
     success "Temp clone ready at ${TMP_REPO}"
 }
 
-# ── Copy binaries and generate checksums ─────────────────────────────────────
-BIN_DIR="${TMP_REPO}/bin"
-VERSION_BIN_DIR="${BIN_DIR}/${VERSION_TAG}"
+# ── Paths set by setup_temp_clone after TMP_REPO is available ───────────────
+BIN_DIR=""
+VERSION_BIN_DIR=""
 
 copy_artifacts() {
     mkdir -p "$VERSION_BIN_DIR"
@@ -100,6 +100,11 @@ info "Version: ${VERSION_TAG}"
 echo ""
 
 setup_temp_clone
+
+# Set paths now TMP_REPO is available
+BIN_DIR="${TMP_REPO}/bin"
+VERSION_BIN_DIR="${BIN_DIR}/${VERSION_TAG}"
+
 copy_artifacts
 generate_checksums
 update_version_file
