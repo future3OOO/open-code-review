@@ -120,7 +120,7 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	a.StringVarP(&opts.commit, "commit", "c", "", "single commit hash or tag to review (vs its parent)")
 	a.StringVarP(&opts.outputFormat, "format", "f", "text", "output format: text or json")
 	a.IntVar(&opts.concurrency, "concurrency", 8, "max concurrent file reviews")
-	a.IntVar(&opts.perFileTimeout, "timeout", 10, "per-file timeout in minutes")
+	a.IntVar(&opts.perFileTimeout, "timeout", 10, "concurrent task timeout in minutes")
 	a.StringVar(&opts.audience, "audience", "human", "output audience: human (show progress) or agent (summary only)")
 
 	if err := a.Parse(args); err != nil {
@@ -181,18 +181,17 @@ Examples:
   # Agent mode (summary only, no progress lines)
   ocr review --audience agent
 
-Flags:`)
-	fs := flag.NewFlagSet("print", flag.ContinueOnError)
-	var d reviewOptions
-	fs.StringVar(&d.rulePath, "rule", "", "path to JSON file with system review rules")
-	fs.StringVar(&d.repoDir, "repo", "", "root directory of the git repository (default: current dir)")
-	fs.StringVar(&d.from, "from", "", "source ref to start diff from (e.g., 'main')")
-	fs.StringVar(&d.to, "to", "", "target ref to end diff at (e.g., 'feature-branch')")
-	fs.StringVar(&d.commit, "commit", "", "single commit hash or tag to review (vs its parent) (shorthand: -c)")
-	fs.IntVar(&d.concurrency, "concurrency", 8, "max concurrent file reviews")
-	fs.IntVar(&d.perFileTimeout, "timeout", 10, "per-file timeout in minutes")
-	fs.StringVar(&d.audience, "audience", "human", "output audience: human (show progress) or agent (summary only)")
-	fs.PrintDefaults()
+Flags:
+  --audience string       output audience: human (show progress) or agent (summary only) (default "human")
+  -c, --commit string     single commit hash or tag to review (vs its parent)
+  -f, --format string     output format: text or json (default "text")
+  --concurrency int       max concurrent file reviews (default 8)
+  --from string           source ref to start diff from (e.g., 'main')
+  --repo string           root directory of the git repository (default: current dir)
+  --rule string           path to JSON file with system review rules
+  --timeout int           concurrent task timeout in minutes (default 10)
+  --to string             target ref to end diff at (e.g., 'feature-branch')
+  --tools string          path to JSON tools config file (default: embedded)`)
 }
 
 // --- config subcommand ---
@@ -235,6 +234,8 @@ Examples:
   ocr config set llm.url https://xx/v1/openai/chat/completions
   ocr config set llm.auth_token xxxxxxxxxx
   ocr config set llm.model claude-opus-4-6
+  ocr config set language English
+  ocr config set telemetry.enabled true
 
-Supported keys: llm.provider, llm.url, llm.auth_token, llm.model`)
+Supported keys: llm.provider, llm.url, llm.auth_token, llm.model, llm.use_anthropic, language, telemetry.enabled, telemetry.exporter, telemetry.otlp_endpoint, telemetry.content_logging`)
 }
