@@ -1,6 +1,6 @@
 {
   "name": "@ali/open-code-review",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "OpenCodeReview CLI — AI-powered code review tool",
   "bin": {
     "ocr": "bin/ocr.js"

@@ -150,3 +150,10 @@ Apache-2.0
 - feat: ocr.js 可执行权限 (3b1f793)
 - chore(release): bump version to v0.1.3 (33d6380)
 - feat: update publish readme (c79d952)
+
+---
+
+## Changelog v0.1.5 (2026-05-14)
+
+- refactor: rename per-file timeout to concurrent task timeout and improve CLI help docs (067084d)
+- chore(release): bump version to v0.1.4 (b6269d9)
