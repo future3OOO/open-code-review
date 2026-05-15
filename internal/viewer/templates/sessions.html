@@ -21,7 +21,7 @@
             <td><code>{{.Model}}</code></td>
             <td>{{.FileCount}}</td>
             <td>{{formatDuration .DurationSec}}</td>
-            <td>{{.Timestamp.Format "2006-01-02 15:04"}}</td>
+            <td>{{formatTime .Timestamp}}</td>
         </tr>
     {{end}}
     </tbody>

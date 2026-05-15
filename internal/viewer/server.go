@@ -55,9 +55,22 @@ func StartServer(addr string) error {
 	return srv.ListenAndServe()
 }
 
+var cstZone = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.FixedZone("CST", 8*60*60)
+	}
+	return loc
+}()
+
+func formatTime(t time.Time) string {
+	return t.In(cstZone).Format("2006-01-02 15:04")
+}
+
 func parseTemplate(name string) (*template.Template, error) {
 	funcMap := template.FuncMap{
 		"formatDuration": formatDuration,
+		"formatTime":     formatTime,
 		"truncate":       truncateText,
 		"add":            func(a, b int) int { return a + b },
 	}

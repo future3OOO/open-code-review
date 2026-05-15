@@ -18,7 +18,7 @@
         <tr>
             <td><a href="/r/{{.EncodedPath}}">{{.EncodedPath}}</a></td>
             <td>{{.SessionCount}}</td>
-            <td>{{.LastModified.Format "2006-01-02 15:04"}}</td>
+            <td>{{formatTime .LastModified}}</td>
         </tr>
     {{end}}
     </tbody>
