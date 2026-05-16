@@ -83,7 +83,7 @@ update_version_file() {
 commit_and_push() {
     cd "$TMP_REPO"
 
-    git add -A
+    git add --sparse -A
 
     if git diff --cached --quiet; then
         info "No changes to commit — binaries already match."
