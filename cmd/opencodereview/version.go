@@ -13,7 +13,7 @@ var (
 )
 
 func printVersion() {
-	fmt.Printf("opencodereview %s", Version)
+	fmt.Printf("open-code-review %s", Version)
 	if GitCommit != "" {
 		fmt.Printf(" (%s)", GitCommit)
 	}
