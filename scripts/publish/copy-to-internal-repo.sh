@@ -25,8 +25,12 @@ trap cleanup_tmp_repo EXIT INT TERM
 
 setup_temp_clone() {
     TMP_REPO=$(mktemp -d -t "ocr-internal-repo.XXXXXX")
-    info "Cloning internal-release repo to temp directory..."
-    git clone --depth 1 git@gitlab.alibaba-inc.com:open-code-review/internal-release.git "$TMP_REPO"
+    info "Cloning internal-release repo (sparse) to temp directory..."
+    git clone --depth 1 --filter=blob:none --sparse \
+        git@gitlab.alibaba-inc.com:open-code-review/internal-release.git "$TMP_REPO"
+    cd "$TMP_REPO"
+    git sparse-checkout set --no-cone VERSION
+    cd "$PROJECT_ROOT"
     success "Temp clone ready at ${TMP_REPO}"
 }
 
