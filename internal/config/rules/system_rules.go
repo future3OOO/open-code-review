@@ -11,10 +11,67 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
+// PathRule is a single pattern→rule entry preserving declaration order.
+type PathRule struct {
+	Pattern string
+	Rule    string
+}
+
 // SystemRule holds review rules loaded from an external JSON config.
 type SystemRule struct {
-	DefaultRule string            `json:"default_rule"`
-	PathRuleMap map[string]string `json:"path_rule_map"`
+	DefaultRule string     `json:"default_rule"`
+	PathRules   []PathRule // ordered; first match wins
+}
+
+// UnmarshalJSON preserves the key order from JSON's path_rule_map object.
+func (r *SystemRule) UnmarshalJSON(data []byte) error {
+	// Decode default_rule normally.
+	var wrapper struct {
+		DefaultRule string `json:"default_rule"`
+	}
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		return err
+	}
+	r.DefaultRule = wrapper.DefaultRule
+
+	// Use json.Decoder with UseNumber to preserve order of path_rule_map keys.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	mapData, ok := raw["path_rule_map"]
+	if !ok || len(mapData) == 0 || string(mapData) == "null" {
+		return nil
+	}
+
+	// Parse ordered keys using a streaming decoder.
+	dec := json.NewDecoder(strings.NewReader(string(mapData)))
+	// Read opening '{'
+	t, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("expected '{' in path_rule_map: %w", err)
+	}
+	if t != json.Delim('{') {
+		return fmt.Errorf("expected '{' in path_rule_map, got %v", t)
+	}
+	for dec.More() {
+		// Read key
+		keyTok, err := dec.Token()
+		if err != nil {
+			return fmt.Errorf("read path_rule_map key: %w", err)
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return fmt.Errorf("expected string key in path_rule_map, got %T", keyTok)
+		}
+		// Read value
+		var value string
+		if err := dec.Decode(&value); err != nil {
+			return fmt.Errorf("read path_rule_map value for %q: %w", key, err)
+		}
+		r.PathRules = append(r.PathRules, PathRule{Pattern: key, Rule: value})
+	}
+	return nil
 }
 
 //go:embed system_rules.json
@@ -47,11 +104,11 @@ func LoadFile(path string) (*SystemRule, error) {
 // The first match wins; if none match, it falls back to DefaultRule.
 // Supports full glob syntax including ** for recursive directory matching.
 func (r *SystemRule) Resolve(path string) string {
-	for pattern, rule := range r.PathRuleMap {
-		expanded := expandBraces(pattern)
+	for _, pr := range r.PathRules {
+		expanded := expandBraces(pr.Pattern)
 		for _, p := range expanded {
 			if matched, _ := doublestar.Match(p, path); matched {
-				return rule
+				return pr.Rule
 			}
 		}
 	}
