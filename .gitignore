@@ -5,7 +5,9 @@
 *.iws
 
 dist/
-.claude/
+.claude/plans
+.claude/settings.local.json
+
 CLAUDE.md
 pages/package-lock.json
 scripts/hooks/
