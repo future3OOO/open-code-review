@@ -390,7 +390,7 @@ func (c *OpenAIClient) buildOpenAIParams(model string, req ChatRequest) openai.C
 		params.Tools = tools
 	}
 	if req.MaxTokens > 0 {
-		params.MaxTokens = openai.Int(int64(req.MaxTokens))
+		params.MaxCompletionTokens = openai.Int(int64(req.MaxTokens))
 	}
 	if req.Temperature != nil {
 		params.Temperature = openai.Float(*req.Temperature)
