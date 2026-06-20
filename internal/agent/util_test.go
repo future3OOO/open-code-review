@@ -178,6 +178,84 @@ func TestCountMessagesTokens(t *testing.T) {
 	}
 }
 
+func TestExtractJSONArray(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "pure JSON array",
+			input: `["c-0","c-1"]`,
+			want:  `["c-0","c-1"]`,
+		},
+		{
+			name:  "JSON embedded in analysis",
+			input: "Let me analyze...\n\nThe answer is:\n[\"c-0\"]\n\nDone.",
+			want:  `["c-0"]`,
+		},
+		{
+			name:  "empty array in reasoning text",
+			input: "After careful analysis, no comments are incorrect.\n[]",
+			want:  `[]`,
+		},
+		{
+			name:  "no JSON array at all",
+			input: "This is just plain text with no brackets.",
+			want:  "",
+		},
+		{
+			name:  "nested brackets in content",
+			input: `Some text ["c-0","c-2"] more text`,
+			want:  `["c-0","c-2"]`,
+		},
+		{
+			name:  "invalid JSON with brackets",
+			input: "array = [not valid json]",
+			want:  "",
+		},
+		{
+			name:  "empty input",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractJSONArray(tt.input)
+			if got != tt.want {
+				t.Errorf("extractJSONArray() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseFilterResponse_WithAnalysisText(t *testing.T) {
+	raw := "Let me analyze the comments.\n\nComment c-0 is incorrect because...\n\n```json\n[\"c-0\"]\n```"
+	indices := parseFilterResponse(raw, 3)
+	if _, ok := indices[0]; !ok {
+		t.Errorf("expected index 0 in result, got %v", indices)
+	}
+	if len(indices) != 1 {
+		t.Errorf("expected 1 index, got %d", len(indices))
+	}
+}
+
+func TestParseFilterResponse_ReasoningWithEmbeddedJSON(t *testing.T) {
+	raw := "After analysis, the incorrect comments are: [\"c-1\", \"c-2\"]\n\nExplanation: ..."
+	indices := parseFilterResponse(raw, 5)
+	if len(indices) != 2 {
+		t.Errorf("expected 2 indices, got %d: %v", len(indices), indices)
+	}
+	if _, ok := indices[1]; !ok {
+		t.Errorf("expected index 1 in result")
+	}
+	if _, ok := indices[2]; !ok {
+		t.Errorf("expected index 2 in result")
+	}
+}
+
 func TestReviewModeString(t *testing.T) {
 	tests := []struct {
 		from, to, commit string

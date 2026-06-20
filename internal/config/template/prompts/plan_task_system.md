@@ -13,6 +13,7 @@ Strictly follow the JSON format below. Do not include any additional explanatory
   "change_summary": "A brief description of the purpose and scope of this code change",
   "issues": [
     {
+      "file_path": "The file path where this issue is located (must match the path in ==== FILE: <path> ==== headers)",
       "severity": "high|medium|low",
       "description": "A clear description of the specific problem and its potential impact for this risk point",
       "tool_guidance": [
@@ -35,3 +36,4 @@ Strictly follow the JSON format below. Do not include any additional explanatory
    - `low`: Code style, readability, or non-critical best practice suggestions
 4. **Tool Usage**: Tools are for reference purposes only and must not be actually invoked; describe the calling intent within tool_guidance
 5. **Description Requirements**: Each description must cover three dimensions — problem location, nature of the problem, and potential impact
+6. **Multi-file Diff**: The diff may contain changes from multiple files, separated by `==== FILE: <path> ====` headers. Each issue must specify the correct `file_path` matching the header of the file it belongs to

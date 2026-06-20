@@ -254,6 +254,32 @@ func (jw *jsonlWriter) WriteToolCall(filePath string, taskType TaskType, toolNam
 	return uuid
 }
 
+// FileGroupRecord describes a multi-file review group for viewer rendering.
+type FileGroupRecord struct {
+	SessionKey string   `json:"session_key"`
+	Files      []string `json:"files"`
+	Reason     string   `json:"reason"`
+}
+
+// WriteFileGroups writes a file_groups record containing all multi-file group metadata.
+func (jw *jsonlWriter) WriteFileGroups(groups []FileGroupRecord) string {
+	uuid := generateUUID()
+
+	jw.mu.Lock()
+	defer jw.mu.Unlock()
+	rec := map[string]any{
+		"uuid":       uuid,
+		"parentUuid": jw.lastUUID,
+		"type":       "file_groups",
+		"sessionId":  jw.sessionID,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+		"groups":     groups,
+	}
+	jw.writeRecordLocked(rec)
+	jw.lastUUID = uuid
+	return uuid
+}
+
 // WriteSessionEnd writes the final session_end summary record and closes the file.
 func (jw *jsonlWriter) WriteSessionEnd(duration time.Duration, filesReviewed []string, llmFailures int64) {
 	uuid := generateUUID()

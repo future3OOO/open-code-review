@@ -47,6 +47,8 @@ func ParseComments(args map[string]any) ([]model.LlmComment, string) {
 		return nil, fmt.Sprintf("Error: 'comments' array is required. Got args: %s", string(raw))
 	}
 
+	topLevelPath, _ := args["path"].(string)
+
 	var comments []model.LlmComment
 	for _, raw := range rawComments {
 		obj, ok := raw.(map[string]any)
@@ -68,8 +70,10 @@ func ParseComments(args map[string]any) ([]model.LlmComment, string) {
 		if thinking, ok := obj["thinking"].(string); ok {
 			cm.Thinking = thinking
 		}
-		if path, ok := args["path"].(string); ok {
-			cm.Path = path
+		if perPath, ok := obj["path"].(string); ok && perPath != "" {
+			cm.Path = perPath
+		} else {
+			cm.Path = topLevelPath
 		}
 
 		if cm.Path == "" || cm.Content == "" {

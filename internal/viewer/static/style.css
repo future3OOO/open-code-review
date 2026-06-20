@@ -275,6 +275,7 @@ h3 { margin: 1.5rem 0 0.75rem; color: #24292e; }
 .badge-tokens { background: #dafbe1; color: #116329; }
 .badge-duration { background: #fff8c5; color: #6a5700; }
 .badge-error { background: #ffebe9; color: #cf222e; }
+.badge-merged { background: #f0e6ff; color: #6639a6; }
 
 /* Response Content */
 .card-body {
@@ -442,3 +443,56 @@ h3 { margin: 1.5rem 0 0.75rem; color: #24292e; }
 }
 
 p { color: #586069; padding: 1rem 0; }
+
+/* File group indicator badge */
+.file-group-indicator {
+    background: #ddf4ff;
+    color: #0550ae;
+    padding: 0.1em 0.5em;
+    border-radius: 4px;
+    font-size: 0.72em;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.file-group-extra {
+    color: #586069;
+    font-size: 0.82em;
+}
+
+/* Group members panel */
+.file-group-members {
+    background: #f0f6ff;
+    border-bottom: 1px solid #d0d7de;
+    padding: 0.6rem 1rem;
+}
+
+.file-group-reason {
+    font-size: 0.8rem;
+    color: #586069;
+    font-style: italic;
+    margin-bottom: 0.4rem;
+}
+
+.file-group-list {
+    margin: 0;
+    padding-left: 1.2rem;
+    font-size: 0.82rem;
+}
+.file-group-list li {
+    margin: 0.15rem 0;
+    font-family: SFMono-Regular, Consolas, monospace;
+}
+
+/* System task styling */
+.file-system-task .file-accordion-header {
+    background: #f8f0ff;
+}
+.file-path-system {
+    color: #8250df;
+    font-style: italic;
+}
+
+/* Task type colors for new types */
+.task-grouping .task-type-dot { background: #bf8700; }
+.task-filter .task-type-dot { background: #1a7f37; }

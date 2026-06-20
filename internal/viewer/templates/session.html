@@ -86,7 +86,7 @@
 <h3>Files Reviewed</h3>
 <ul class="file-list">
 {{range .Session.Summary.FilesReviewed}}
-    <li>{{.}}</li>
+    {{if ne . "__file_grouping__"}}<li>{{.}}</li>{{end}}
 {{end}}
 </ul>
 {{end}}
@@ -94,12 +94,30 @@
 <h3>Conversations ({{len .Session.Files}} files)</h3>
 <div class="conversations">
 {{range .Session.Files}}
-<details class="file-accordion">
+<details class="file-accordion{{if .GroupFiles}} file-group{{end}}{{if eq .FilePath "__file_grouping__"}} file-system-task{{end}}">
     <summary class="file-accordion-header">
         <span class="chevron"></span>
+        {{if .GroupFiles}}
+        <span class="file-group-indicator">Group</span>
+        <span class="file-path">{{index .GroupFiles 0}}</span>
+        <span class="file-group-extra">+ {{subtract (len .GroupFiles) 1}} files</span>
+        {{else if eq .FilePath "__file_grouping__"}}
+        <span class="file-path file-path-system">File Grouping (System)</span>
+        {{else}}
         <span class="file-path">{{.FilePath}}</span>
+        {{end}}
         <span class="file-count-badge">{{cardCount .Tasks}} requests</span>
     </summary>
+    {{if .GroupFiles}}
+    <div class="file-group-members">
+        <div class="file-group-reason">{{.GroupReason}}</div>
+        <ul class="file-group-list">
+        {{range .GroupFiles}}
+            <li>{{.}}</li>
+        {{end}}
+        </ul>
+    </div>
+    {{end}}
     <div class="file-accordion-body">
         {{range $tg := orderedTasks .Tasks}}
         <div class="task-group {{taskTypeClass $tg.Type}}">
@@ -111,6 +129,7 @@
             <div class="card">
                 <div class="card-header">
                     <span class="request-label">Request #{{.RequestNo}}</span>
+                    {{if .MergedSteps}}<span class="badge badge-merged">+{{.MergedSteps}} steps</span>{{end}}
                     {{if .Model}}<span class="badge badge-model">{{.Model}}</span>{{end}}
                     {{if or .PromptTokens .CompletionTokens}}<span class="badge badge-tokens">P:{{.PromptTokens}} C:{{.CompletionTokens}}{{if or .CacheReadTokens .CacheWriteTokens}} CR:{{.CacheReadTokens}} CW:{{.CacheWriteTokens}}{{end}}</span>{{end}}
                     {{if .DurationMs}}<span class="badge badge-duration">{{.DurationMs}}ms</span>{{end}}

@@ -34,7 +34,15 @@
       { "role": "user", "prompt_file": "re_location_task_user.md" }
     ]
   },
+  "FILE_GROUPING_TASK": {
+    "timeout": 60,
+    "messages": [
+      { "role": "system", "prompt_file": "file_grouping_task_system.md" },
+      { "role": "user", "prompt_file": "file_grouping_task_user.md" }
+    ]
+  },
   "MAX_TOOL_REQUEST_TIMES": 30,
   "PLAN_MODE_LINE_THRESHOLD": 50,
-  "MAX_TOKENS": 58888
+  "MAX_TOKENS": 58888,
+  "GROUPING_LINE_THRESHOLD": 1000
 }

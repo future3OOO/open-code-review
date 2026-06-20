@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/open-code-review/open-code-review/internal/llm"
 )
 
 func TestEncodeRepoPath(t *testing.T) {
@@ -261,5 +263,106 @@ func TestSessionEndIncludesFailures(t *testing.T) {
 	}
 	if int64(failures) != 3 {
 		t.Errorf("llm_failures = %v, want 3", failures)
+	}
+}
+
+func TestFinalize_FilesReviewedIncludesGroupMembers(t *testing.T) {
+	repoDir := t.TempDir()
+	sh := New(repoDir, "main", "test-model", SessionOptions{ReviewMode: ReviewModeWorkspace})
+
+	sh.GetOrCreateFileSession("a.go")
+
+	sh.WriteFileGroups([]FileGroupRecord{
+		{
+			SessionKey: "a.go",
+			Files:      []string{"a.go", "b.go", "c.go"},
+			Reason:     "related changes",
+		},
+	})
+
+	sh.Finalize()
+
+	path := sessionJSONLPath(t, repoDir, sh.SessionID)
+	records := readJSONLRecords(t, path)
+
+	var endRec map[string]any
+	for _, r := range records {
+		if r["type"] == "session_end" {
+			endRec = r
+			break
+		}
+	}
+	if endRec == nil {
+		t.Fatal("no session_end record found")
+	}
+
+	rawFiles, ok := endRec["files_reviewed"].([]any)
+	if !ok {
+		t.Fatalf("files_reviewed missing or wrong type: %v", endRec["files_reviewed"])
+	}
+	got := make(map[string]bool, len(rawFiles))
+	for _, v := range rawFiles {
+		got[v.(string)] = true
+	}
+	for _, want := range []string{"a.go", "b.go", "c.go"} {
+		if !got[want] {
+			t.Errorf("files_reviewed missing %q, got %v", want, rawFiles)
+		}
+	}
+}
+
+func TestSetResponse_FallsBackToReasoningContent(t *testing.T) {
+	repoDir := t.TempDir()
+	sh := New(repoDir, "main", "test-model", SessionOptions{ReviewMode: ReviewModeWorkspace})
+	defer sh.Finalize()
+
+	fs := sh.GetOrCreateFileSession("test.go")
+	rec := fs.AppendTaskRecord(ReviewFilterTask, nil)
+
+	resp := &llm.ChatResponse{
+		Model: "test-reasoning-model",
+		Choices: []llm.Choice{{
+			Message: llm.ResponseMessage{
+				Role:             "assistant",
+				Content:          nil,
+				ReasoningContent: "[1, 3]",
+			},
+			FinishReason: "stop",
+		}},
+		Usage: &llm.UsageInfo{
+			PromptTokens:     100,
+			CompletionTokens: 10,
+		},
+	}
+	rec.SetResponse(resp, 500*time.Millisecond)
+
+	if rec.Response == nil {
+		t.Fatal("Response is nil after SetResponse")
+	}
+	if rec.Response.Content != "[1, 3]" {
+		t.Errorf("Response.Content = %q, want %q", rec.Response.Content, "[1, 3]")
+	}
+
+	if sh.persist != nil {
+		sh.persist.mu.Lock()
+		sh.persist.writer.Flush()
+		sh.persist.mu.Unlock()
+	}
+
+	path := sessionJSONLPath(t, repoDir, sh.SessionID)
+	records := readJSONLRecords(t, path)
+
+	var found bool
+	for _, r := range records {
+		if r["type"] == "llm_response" && r["taskType"] == string(ReviewFilterTask) {
+			found = true
+			if r["content"] != "[1, 3]" {
+				t.Errorf("JSONL content = %v, want [1, 3]", r["content"])
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("no llm_response record found for review_filter_task")
 	}
 }

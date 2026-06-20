@@ -2,6 +2,7 @@ package diff
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -127,5 +128,101 @@ index 0000000..1234567
 	}
 	if d.Insertions != 2 {
 		t.Errorf("Insertions = %d, want 2", d.Insertions)
+	}
+}
+
+func TestStripDiffHeaders(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "standard diff with index line",
+			in: strings.Join([]string{
+				"diff --git a/foo.go b/foo.go",
+				"index 1234567..89abcde 100644",
+				"--- a/foo.go",
+				"+++ b/foo.go",
+				"@@ -1,3 +1,3 @@",
+				" line1",
+				"-line2",
+				"+line2 changed",
+				" line3",
+			}, "\n"),
+			want: strings.Join([]string{
+				"--- a/foo.go",
+				"+++ b/foo.go",
+				"@@ -1,3 +1,3 @@",
+				" line1",
+				"-line2",
+				"+line2 changed",
+				" line3",
+			}, "\n"),
+		},
+		{
+			name: "rename diff preserves extended headers",
+			in: strings.Join([]string{
+				"diff --git a/old.go b/new.go",
+				"similarity index 95%",
+				"rename from old.go",
+				"rename to new.go",
+				"index 1234567..89abcde 100644",
+				"--- a/old.go",
+				"+++ b/new.go",
+				"@@ -1,2 +1,2 @@",
+				" line1",
+				"-old",
+				"+new",
+			}, "\n"),
+			want: strings.Join([]string{
+				"similarity index 95%",
+				"rename from old.go",
+				"rename to new.go",
+				"--- a/old.go",
+				"+++ b/new.go",
+				"@@ -1,2 +1,2 @@",
+				" line1",
+				"-old",
+				"+new",
+			}, "\n"),
+		},
+		{
+			name: "content line starting with index prefix not stripped",
+			in: strings.Join([]string{
+				"diff --git a/x.go b/x.go",
+				"index aaa..bbb 100644",
+				"--- a/x.go",
+				"+++ b/x.go",
+				"@@ -1,2 +1,3 @@",
+				" line1",
+				"+index foo..bar is data",
+			}, "\n"),
+			want: strings.Join([]string{
+				"--- a/x.go",
+				"+++ b/x.go",
+				"@@ -1,2 +1,3 @@",
+				" line1",
+				"+index foo..bar is data",
+			}, "\n"),
+		},
+		{
+			name: "empty string",
+			in:   "",
+			want: "",
+		},
+		{
+			name: "no trailing newline preserved",
+			in:   "diff --git a/f b/f\n--- a/f\n+++ b/f",
+			want: "--- a/f\n+++ b/f",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := StripDiffHeaders(tt.in)
+			if got != tt.want {
+				t.Errorf("StripDiffHeaders() =\n%s\nwant:\n%s", got, tt.want)
+			}
+		})
 	}
 }

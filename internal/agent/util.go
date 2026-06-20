@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -22,6 +23,9 @@ import (
 var planBlockPattern = regexp.MustCompile(
 	`(?m)^### [^\n]*(?:Review Plan|审查计划)[^\n]*\n\{\{plan_guidance\}\}\n\n?`)
 
+var backgroundBlockPattern = regexp.MustCompile(
+	`(?m)^### [^\n]*(?:Requirement Background|需求背景)[^\n]*\n\{\{requirement_background\}\}\n\n?`)
+
 // stripEmptyPlanBlock removes the "### Review Plan …\n{{plan_guidance}}\n\n"
 // wrapper from a MAIN_TASK user message when the plan phase produced no
 // guidance. The previous implementation hard-coded a single Chinese literal,
@@ -31,6 +35,10 @@ var planBlockPattern = regexp.MustCompile(
 // failed. Strip is a no-op when the wrapper is absent.
 func stripEmptyPlanBlock(content string) string {
 	return planBlockPattern.ReplaceAllString(content, "")
+}
+
+func stripEmptyBackgroundBlock(content string) string {
+	return backgroundBlockPattern.ReplaceAllString(content, "")
 }
 
 // stripMarkdownFences removes ```json and ``` wrappers that some models
@@ -51,6 +59,31 @@ func stripMarkdownFences(s string) string {
 		s = strings.TrimSpace(s)
 	}
 	return s
+}
+
+// extractJSONArray finds the last top-level JSON array in a string that may
+// contain surrounding natural-language text. Returns "" if none found.
+func extractJSONArray(s string) string {
+	end := strings.LastIndex(s, "]")
+	if end < 0 {
+		return ""
+	}
+	depth := 0
+	for i := end; i >= 0; i-- {
+		switch s[i] {
+		case ']':
+			depth++
+		case '[':
+			depth--
+			if depth == 0 {
+				candidate := strings.TrimSpace(s[i : end+1])
+				if json.Valid([]byte(candidate)) {
+					return candidate
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func buildMessageXML(msgs []llm.Message) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -383,6 +384,38 @@ func (a *Agent) dispatchSubtasks(ctx context.Context) ([]model.LlmComment, error
 		return nil, fmt.Errorf("all diffs filtered out by token size")
 	}
 
+	// Filter out deleted files before grouping.
+	var reviewable []model.Diff
+	for _, d := range a.diffs {
+		if !d.IsDeleted {
+			reviewable = append(reviewable, d)
+		}
+	}
+	if len(reviewable) == 0 {
+		return []model.LlmComment{}, nil
+	}
+
+	groups := a.executeFileGrouping(ctx, reviewable)
+
+	var groupRecords []session.FileGroupRecord
+	for _, g := range groups {
+		if len(g.Diffs) > 1 {
+			files := make([]string, len(g.Diffs))
+			for i, d := range g.Diffs {
+				files[i] = d.NewPath
+			}
+			sort.Strings(files)
+			groupRecords = append(groupRecords, session.FileGroupRecord{
+				SessionKey: files[0],
+				Files:      files,
+				Reason:     g.Reason,
+			})
+		}
+	}
+	if len(groupRecords) > 0 {
+		a.session.WriteFileGroups(groupRecords)
+	}
+
 	var wg sync.WaitGroup
 
 	concurrency := a.args.MaxConcurrency
@@ -393,43 +426,36 @@ func (a *Agent) dispatchSubtasks(ctx context.Context) ([]model.LlmComment, error
 	sem := make(chan struct{}, concurrency)
 	timeout := time.Duration(a.args.ConcurrentTaskTimeout) * time.Minute
 
-	var dispatched int64
-	for i := range a.diffs {
-		if a.diffs[i].IsDeleted {
-			continue
-		}
-		dispatched++
+	dispatched := int64(len(groups))
+	for i := range groups {
 		wg.Add(1)
 		sem <- struct{}{} // acquire semaphore
 
-		go func(d model.Diff) {
+		go func(group DiffGroup) {
 			defer wg.Done()
 			defer func() { <-sem }() // release
 
-			var fileCtx context.Context
+			var groupCtx context.Context
 			var cancel context.CancelFunc
 			if timeout > 0 {
-				fileCtx, cancel = context.WithTimeout(ctx, timeout)
+				groupCtx, cancel = context.WithTimeout(ctx, timeout)
 				defer cancel()
 			} else {
-				fileCtx = ctx
+				groupCtx = ctx
 			}
 
-			if err := a.executeSubtask(fileCtx, d); err != nil {
+			if err := a.executeSubtask(groupCtx, group); err != nil {
 				atomic.AddInt64(&a.subtaskFailed, 1)
-				fmt.Fprintf(stdout.Writer(), "[ocr] Subtask error for %s: %v\n", d.NewPath, err)
-				telemetry.ErrorEvent(fileCtx, "subtask.error", err,
-					telemetry.AnyToAttr("file.path", d.NewPath))
-				a.recordWarning("subtask_error", d.NewPath, err.Error())
+				paths := groupPathNames(group)
+				fmt.Fprintf(stdout.Writer(), "[ocr] Subtask error for %s: %v\n", paths, err)
+				telemetry.ErrorEvent(groupCtx, "subtask.error", err,
+					telemetry.AnyToAttr("file.path", paths))
+				a.recordWarning("subtask_error", paths, err.Error())
 			}
-		}(a.diffs[i])
+		}(groups[i])
 	}
 
 	wg.Wait()
-
-	if dispatched == 0 {
-		return []model.LlmComment{}, nil
-	}
 
 	// All subtasks finished — collect comments from the global collector once.
 	if a.args.CommentWorkerPool != nil {
@@ -444,44 +470,81 @@ func (a *Agent) dispatchSubtasks(ctx context.Context) ([]model.LlmComment, error
 	return a.args.CommentCollector.Comments(), nil
 }
 
-// executeSubtask performs the Plan Phase + Main Loop for a single file.
-func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) error {
-	ctx, span := telemetry.StartSpan(ctx, "subtask.execute."+d.NewPath)
+// reviewCtx carries path context for a review session (single or multi-file group).
+type reviewCtx struct {
+	primaryPath string          // single-file: the NewPath; multi-file: empty
+	validPaths  map[string]bool // all paths valid for code_comment in this group
+}
+
+// executeSubtask performs the Plan Phase + Main Loop for a DiffGroup.
+// A single-file group is treated as a group with one file.
+func (a *Agent) executeSubtask(ctx context.Context, group DiffGroup) error {
+	if len(group.Diffs) == 0 {
+		return nil
+	}
+
+	singleFile := len(group.Diffs) == 1
+
+	paths := make([]string, len(group.Diffs))
+	validPaths := make(map[string]bool, len(group.Diffs))
+	for i, d := range group.Diffs {
+		paths[i] = d.NewPath
+		validPaths[d.NewPath] = true
+	}
+	sort.Strings(paths)
+	sessionKey := paths[0]
+
+	spanName := fmt.Sprintf("subtask.%s", sessionKey)
+	ctx, span := telemetry.StartSpan(ctx, spanName)
 	defer span.End()
-	telemetry.SetAttr(span, "file.path", d.NewPath)
-	telemetry.SetAttr(span, "lines.changed", d.Insertions+d.Deletions)
-	telemetry.SetAttr(span, "lines.inserted", d.Insertions)
-	telemetry.SetAttr(span, "lines.deleted", d.Deletions)
+	telemetry.SetAttr(span, "group.files", strings.Join(paths, ","))
+	telemetry.SetAttr(span, "group.size", len(paths))
 
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 
-	newPath := d.NewPath
+	// Build diff content: raw for single file, combined with FILE separators for groups.
+	// Strip "diff --git" and "index" header lines to reduce token usage in prompts.
+	var diffContent string
+	if singleFile {
+		diffContent = diff.StripDiffHeaders(group.Diffs[0].Diff)
+	} else {
+		var combined strings.Builder
+		for i, d := range group.Diffs {
+			if i > 0 {
+				combined.WriteString("\n\n")
+			}
+			combined.WriteString("==== FILE: ")
+			combined.WriteString(d.NewPath)
+			combined.WriteString(" ====\n")
+			combined.WriteString(diff.StripDiffHeaders(d.Diff))
+		}
+		diffContent = combined.String()
+	}
 
-	// Build change-files list excluding current file
-	changeFilesExcludingCurrent := a.buildChangeFilesExcept(newPath)
-
-	rule := a.resolveSystemRule(strings.ToLower(newPath))
-
-	threshold := a.args.Template.PlanModeLineThreshold
-	changeLines := d.Insertions + d.Deletions
+	changeFiles := a.buildChangeFilesExceptMany(validPaths)
+	rule := a.resolveGroupRule(paths)
+	displayPath := strings.Join(paths, ", ")
 
 	// Phase 1: Plan (skip when changes are below threshold)
+	changeLines := groupTotalLines(group)
+	threshold := a.args.Template.PlanModeLineThreshold
+
 	var planResult string
 	if a.args.Template.PlanTask != nil && len(a.args.Template.PlanTask.Messages) > 0 && threshold > 0 && changeLines < int64(threshold) {
-		fmt.Fprintf(stdout.Writer(), "[ocr] Skipping plan phase for %s (%d lines < threshold %d)\n", newPath, changeLines, threshold)
+		fmt.Fprintf(stdout.Writer(), "[ocr] Skipping plan phase for %s (%d lines < threshold %d)\n", displayPath, changeLines, threshold)
 		telemetry.Event(ctx, "plan.skipped",
-			telemetry.AnyToAttr("file.path", newPath),
+			telemetry.AnyToAttr("file.path", displayPath),
 			telemetry.AnyToAttr("lines.changed", changeLines),
 			telemetry.AnyToAttr("threshold", threshold))
 	} else if a.args.Template.PlanTask != nil && len(a.args.Template.PlanTask.Messages) > 0 {
 		var err error
-		planResult, err = a.executePlanPhase(ctx, newPath, d.Diff, changeFilesExcludingCurrent, rule)
+		planResult, err = a.executePlanPhase(ctx, sessionKey, displayPath, diffContent, changeFiles, rule)
 		if err != nil {
-			fmt.Fprintf(stdout.Writer(), "[ocr] Plan phase failed for %s: %v (continuing without plan)\n", newPath, err)
+			fmt.Fprintf(stdout.Writer(), "[ocr] Plan phase failed for %s: %v (continuing without plan)\n", displayPath, err)
 			telemetry.Eventf(ctx, "plan.failed", err.Error(),
-				telemetry.AnyToAttr("file.path", newPath))
+				telemetry.AnyToAttr("file.path", displayPath))
 			planResult = ""
 		}
 	}
@@ -496,18 +559,13 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) error {
 	for _, m := range rawMsgs {
 		content := m.Content
 		content = strings.ReplaceAll(content, "{{current_system_date_time}}", a.currentDate)
-		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
 		content = strings.ReplaceAll(content, "{{system_rule}}", rule)
-		content = strings.ReplaceAll(content, "{{change_files}}", changeFilesExcludingCurrent)
-		content = strings.ReplaceAll(content, "{{diff}}", d.Diff)
+		content = strings.ReplaceAll(content, "{{change_files}}", changeFiles)
+		content = strings.ReplaceAll(content, "{{diff}}", diffContent)
+		if a.args.Background == "" {
+			content = stripEmptyBackgroundBlock(content)
+		}
 		content = strings.ReplaceAll(content, "{{requirement_background}}", a.args.Background)
-		// Always substitute the {{plan_guidance}} token so the literal placeholder
-		// never leaks into the rendered prompt. When the plan phase produced no
-		// output, strip the surrounding "### Review Plan (Optional)\n…\n\n" wrapper
-		// (any language variant) so the LLM does not see a dangling section header.
-		// Strip MUST run before ReplaceAll: the regex requires the literal
-		// {{plan_guidance}} token to be present; if we replace first, the token
-		// is gone and the wrapper can't be matched.
 		if planResult == "" {
 			content = stripEmptyPlanBlock(content)
 		}
@@ -517,26 +575,71 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) error {
 
 	tokenCount := countMessagesTokens(messages)
 	maxAllowed := a.args.Template.MaxTokens
-	tokenLimit := maxAllowed * 4 / 5 // 80% of MaxTokens
+	tokenLimit := maxAllowed * 4 / 5
 	if tokenCount > tokenLimit {
 		msg := fmt.Sprintf("prompt tokens (%d) exceed %d%% of max_tokens(%d)", tokenCount, 80, maxAllowed)
-		fmt.Fprintf(stdout.Writer(), "[ocr] WARNING: %s for %s\n", msg, newPath)
-		a.recordWarning("token_threshold_exceeded", newPath, msg)
+		fmt.Fprintf(stdout.Writer(), "[ocr] WARNING: %s for %s\n", msg, displayPath)
+		a.recordWarning("token_threshold_exceeded", displayPath, msg)
 		telemetry.Event(ctx, "token.threshold.exceeded",
-			telemetry.AnyToAttr("file.path", newPath),
+			telemetry.AnyToAttr("file.path", displayPath),
 			telemetry.AnyToAttr("tokens", tokenCount),
 			telemetry.AnyToAttr("max_tokens", maxAllowed))
 		return nil
 	}
 
-	err := a.performLlmCodeReview(ctx, messages, newPath)
+	rctx := reviewCtx{
+		validPaths: validPaths,
+	}
+	if singleFile {
+		rctx.primaryPath = sessionKey
+	}
+
+	err := a.performLlmCodeReview(ctx, messages, rctx)
 	if err == nil {
 		if a.args.CommentWorkerPool != nil {
 			a.args.CommentWorkerPool.Await()
 		}
-		a.executeReviewFilter(ctx, d, newPath)
+		for _, d := range group.Diffs {
+			a.executeReviewFilter(ctx, d, d.NewPath)
+		}
 	}
 	return err
+}
+
+// buildChangeFilesExceptMany returns a formatted list of changed files except those in the exclude set.
+func (a *Agent) buildChangeFilesExceptMany(exclude map[string]bool) string {
+	var sb strings.Builder
+	for _, d := range a.diffs {
+		if d.IsBinary {
+			continue
+		}
+		if exclude[d.NewPath] || exclude[d.OldPath] {
+			continue
+		}
+		status := "MODIFIED"
+		switch {
+		case d.IsNew:
+			status = "ADDED"
+		case d.IsDeleted:
+			status = "DELETED"
+		case d.OldPath != d.NewPath:
+			status = "RENAMED"
+		}
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(status + "   " + d.NewPath)
+	}
+	return sb.String()
+}
+
+// groupPathNames returns a comma-separated list of file paths in the group (for logging).
+func groupPathNames(group DiffGroup) string {
+	names := make([]string, len(group.Diffs))
+	for i, d := range group.Diffs {
+		names[i] = d.NewPath
+	}
+	return strings.Join(names, ", ")
 }
 
 // executeReviewFilter runs the REVIEW_FILTER_TASK to remove comments that are
@@ -558,7 +661,7 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 	for _, m := range ft.Messages {
 		content := m.Content
 		content = strings.ReplaceAll(content, "{{path}}", newPath)
-		content = strings.ReplaceAll(content, "{{diff}}", d.Diff)
+		content = strings.ReplaceAll(content, "{{diff}}", diff.StripDiffHeaders(d.Diff))
 		content = strings.ReplaceAll(content, "{{comments}}", commentsJSON)
 		messages = append(messages, llm.NewTextMessage(m.Role, content))
 	}
@@ -623,13 +726,18 @@ func buildFilterCommentsJSON(comments []model.LlmComment) string {
 // Returns a set of 0-based indices. Invalid IDs or out-of-range indices are ignored.
 func parseFilterResponse(raw string, total int) map[int]struct{} {
 	raw = stripMarkdownFences(raw)
-	var ids []string
-	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+	ids, ok := unmarshalFilterIDs(raw)
+	if !ok {
+		if extracted := extractJSONArray(raw); extracted != "" {
+			ids, ok = unmarshalFilterIDs(extracted)
+		}
+	}
+	if !ok {
 		preview := raw
 		if len(preview) > 200 {
 			preview = preview[:200] + "..."
 		}
-		fmt.Fprintf(stdout.Writer(), "[ocr] Review filter: failed to parse LLM response: %v, raw: %s\n", err, preview)
+		fmt.Fprintf(stdout.Writer(), "[ocr] Review filter: failed to parse LLM response, raw: %s\n", preview)
 		return nil
 	}
 	indices := make(map[int]struct{})
@@ -642,40 +750,12 @@ func parseFilterResponse(raw string, total int) map[int]struct{} {
 	return indices
 }
 
-// buildChangeFilesExcept returns a formatted list of changed files except the given path.
-func (a *Agent) buildChangeFilesExcept(excludePath string) string {
-	var sb strings.Builder
-	for i, d := range a.diffs {
-		if d.IsBinary {
-			continue
-		}
-		if d.NewPath == excludePath || d.OldPath == excludePath {
-			continue
-		}
-		status := "MODIFIED"
-		switch {
-		case d.IsNew:
-			status = "ADDED"
-		case d.IsDeleted:
-			status = "DELETED"
-		case d.OldPath != d.NewPath:
-			status = "RENAMED"
-		}
-		sb.WriteString(status + "   " + d.NewPath)
-		if i < len(a.diffs)-1 {
-			sb.WriteString("\n")
-		}
+func unmarshalFilterIDs(s string) ([]string, bool) {
+	var ids []string
+	if err := json.Unmarshal([]byte(s), &ids); err != nil {
+		return nil, false
 	}
-	return sb.String()
-}
-
-// resolveSystemRule returns the rule text for a given file path,
-// matching against PathRuleMap glob patterns, falling back to DefaultRule.
-func (a *Agent) resolveSystemRule(path string) string {
-	if a.args.SystemRule == nil {
-		return ""
-	}
-	return a.args.SystemRule.Resolve(path)
+	return ids, true
 }
 
 // filterLargeDiffs drops diffs whose diff content alone consumes more than 80% of MaxTokens.
@@ -765,22 +845,24 @@ func (a *Agent) extFromPath(path string) string {
 
 // executePlanPhase runs the plan task for a single file, sending template messages
 // with resolved placeholders and collecting the LLM response as plan guidance.
-func (a *Agent) executePlanPhase(ctx context.Context, newPath, rawDiff, changeFiles, rule string) (string, error) {
+func (a *Agent) executePlanPhase(ctx context.Context, sessionKey, displayPath, rawDiff, changeFiles, rule string) (string, error) {
 	pt := a.args.Template.PlanTask
 	messages := make([]llm.Message, 0, len(pt.Messages))
 	for _, m := range pt.Messages {
 		content := m.Content
 		content = strings.ReplaceAll(content, "{{current_system_date_time}}", a.currentDate)
-		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
 		content = strings.ReplaceAll(content, "{{system_rule}}", rule)
 		content = strings.ReplaceAll(content, "{{change_files}}", changeFiles)
 		content = strings.ReplaceAll(content, "{{diff}}", rawDiff)
+		if a.args.Background == "" {
+			content = stripEmptyBackgroundBlock(content)
+		}
 		content = strings.ReplaceAll(content, "{{requirement_background}}", a.args.Background)
 		content = strings.ReplaceAll(content, "{{plan_tools}}", formatToolDefs(a.args.PlanToolDefs))
 		messages = append(messages, llm.NewTextMessage(m.Role, content))
 	}
 
-	fs := a.session.GetOrCreateFileSession(newPath)
+	fs := a.session.GetOrCreateFileSession(sessionKey)
 	rec := fs.AppendTaskRecord(session.PlanTask, messages)
 	startTime := time.Now()
 
@@ -800,7 +882,7 @@ func (a *Agent) executePlanPhase(ctx context.Context, newPath, rawDiff, changeFi
 		atomic.AddInt64(&a.totalCacheReadTokens, resp.Usage.CacheReadTokens)
 		atomic.AddInt64(&a.totalCacheWriteTokens, resp.Usage.CacheWriteTokens)
 	}
-	fmt.Fprintf(stdout.Writer(), "[ocr] Plan completed for %s\n", newPath)
+	fmt.Fprintf(stdout.Writer(), "[ocr] Plan completed for %s\n", displayPath)
 	return resp.Content(), nil
 }
 
@@ -842,13 +924,21 @@ func formatToolDefs(toolDefs []llm.ToolDef) string {
 	return sb.String()
 }
 
-// performLlmCodeReview drives the main LLM conversation loop for a single file.
+// performLlmCodeReview drives the main LLM conversation loop for a file or group.
 // It sends messages with tool definitions, handles tool calls returned by the model,
 // and collects review comments until task_done is called or limits are reached.
-func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message, newPath string) error {
+func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message, rctx reviewCtx) error {
 	toolReqCount := a.args.Template.MaxToolRequestTimes
 	const maxConsecutiveEmptyRounds = 3
 	consecutiveEmptyRounds := 0
+
+	sessionKey := rctx.primaryPath
+	if sessionKey == "" {
+		sorted := validPathsList(rctx.validPaths)
+		if len(sorted) > 0 {
+			sessionKey = sorted[0]
+		}
+	}
 
 	for toolReqCount > 0 {
 		select {
@@ -859,7 +949,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 
 		toolReqCount--
 
-		fs := a.session.GetOrCreateFileSession(newPath)
+		fs := a.session.GetOrCreateFileSession(sessionKey)
 		rec := fs.AppendTaskRecord(session.MainTask, append([]llm.Message(nil), messages...))
 		startTime := time.Now()
 
@@ -876,7 +966,6 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 			return fmt.Errorf("LLM completion error: %w", err)
 		}
 		rec.SetResponse(resp, duration)
-		// Record LLM metrics with token info from API response usage field.
 		totalTokens := int64(0)
 		if resp.Usage != nil {
 			totalTokens = resp.Usage.TotalTokens
@@ -891,8 +980,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		calls := resp.ToolCalls()
 
 		if len(calls) == 0 {
-			// No tool calls - remind the model
-			fmt.Fprintf(stdout.Writer(), "[ocr] No tool calls parsed for %s, retrying...\n", newPath)
+			fmt.Fprintf(stdout.Writer(), "[ocr] No tool calls parsed for %s, retrying...\n", sessionKey)
 			messages = append(messages, llm.NewTextMessage("user", "You did not successfully call any tools. Please try again or use task_done if finished."))
 			if content != "" {
 				messages = append(messages[:len(messages)-1], llm.NewTextMessage("assistant", content), messages[len(messages)-1])
@@ -905,7 +993,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		hasValidResult := false
 
 		for _, call := range calls {
-			cp := a.executeToolCall(ctx, newPath, call, rec)
+			cp := a.executeToolCall(ctx, rctx, call, rec)
 			if cp.Completed {
 				results = append(results, tool.ToolCallResult{
 					ToolCallID: call.ID,
@@ -935,23 +1023,23 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		if !hasValidResult {
 			consecutiveEmptyRounds++
 			if consecutiveEmptyRounds >= maxConsecutiveEmptyRounds {
-				fmt.Fprintf(stdout.Writer(), "[ocr] Too many empty retries for %s, stopping.\n", newPath)
+				fmt.Fprintf(stdout.Writer(), "[ocr] Too many empty retries for %s, stopping.\n", sessionKey)
 				break
 			}
-			fmt.Fprintf(stdout.Writer(), "[ocr] No valid tool results for %s, retrying...\n", newPath)
+			fmt.Fprintf(stdout.Writer(), "[ocr] No valid tool results for %s, retrying...\n", sessionKey)
 		} else {
 			consecutiveEmptyRounds = 0
 		}
 
-		succeed := a.addNextMessage(ctx, content, calls, results, &messages, newPath)
+		succeed := a.addNextMessage(ctx, content, calls, results, &messages, sessionKey)
 		if !succeed {
-			fmt.Fprintf(stdout.Writer(), "[ocr] Context compression exceeded threshold for %s, stopping.\n", newPath)
+			fmt.Fprintf(stdout.Writer(), "[ocr] Context compression exceeded threshold for %s, stopping.\n", sessionKey)
 			break
 		}
 	}
 
 	if toolReqCount <= 0 {
-		fmt.Fprintf(stdout.Writer(), "[ocr] Max tool requests reached for %s.\n", newPath)
+		fmt.Fprintf(stdout.Writer(), "[ocr] Max tool requests reached for %s.\n", sessionKey)
 	}
 
 	return nil
@@ -960,7 +1048,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 // executeToolCall executes a single tool call from the LLM response and records
 // the result in session history. It handles async dispatch for code_comment when
 // a worker pool is configured, otherwise runs synchronously.
-func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.ToolCall, rec *session.TaskRecord) tool.TaskCheckpoint {
+func (a *Agent) executeToolCall(ctx context.Context, rctx reviewCtx, call llm.ToolCall, rec *session.TaskRecord) tool.TaskCheckpoint {
 	t := tool.OfName(call.Function.Name)
 	if !t.IsKnown() {
 		return tool.Of(tool.NotAvailableMsg)
@@ -970,8 +1058,8 @@ func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.To
 		return tool.Complete()
 	}
 
-	p := lookupTool(a.args.Tools, t)
-	if p == nil {
+	provider := lookupTool(a.args.Tools, t)
+	if provider == nil {
 		return tool.Of(tool.NotAvailableMsg)
 	}
 
@@ -980,11 +1068,21 @@ func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.To
 		return tool.Of(fmt.Sprintf("Error parsing tool arguments for %s: %v", t.Name(), err))
 	}
 
-	// Inject current file path as default for code_comment when not provided.
-	// The model already knows which file it's reviewing, so it omits path.
-	if t == tool.CodeComment && newPath != "" {
-		if _, ok := args["path"]; !ok {
-			args["path"] = newPath
+	if t == tool.CodeComment {
+		// Single-file group: inject path when model omits it (backward compat).
+		if rctx.primaryPath != "" {
+			if _, ok := args["path"]; !ok {
+				args["path"] = rctx.primaryPath
+			}
+		}
+		// Validate path is within valid set when provided.
+		// In multi-file groups, per-comment paths can substitute for the top-level path.
+		argPath, _ := args["path"].(string)
+		if argPath == "" && len(rctx.validPaths) == 1 {
+			return tool.Of("Error: 'path' is required in code_comment.")
+		}
+		if argPath != "" && !rctx.validPaths[argPath] {
+			return tool.Of(fmt.Sprintf("Error: path %q is not a valid file in this review group. Valid paths: %v", argPath, validPathsList(rctx.validPaths)))
 		}
 	}
 
@@ -1000,14 +1098,26 @@ func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.To
 			return tool.Of(errMsg)
 		}
 
-		resolveAndCollect := func(rctx context.Context) {
+		// Filter out comments targeting paths outside the valid set.
+		var filtered []model.LlmComment
+		for i := range comments {
+			if rctx.validPaths[comments[i].Path] {
+				filtered = append(filtered, comments[i])
+			}
+		}
+		if len(filtered) == 0 && len(comments) > 0 {
+			return tool.Of(fmt.Sprintf("Error: all %d comment(s) target paths outside the valid set. Valid paths: %v", len(comments), validPathsList(rctx.validPaths)))
+		}
+		comments = filtered
+
+		resolveAndCollect := func(resolveCtx context.Context) {
 			for i := range comments {
 				cm := &comments[i]
 				d := a.findDiff(cm.Path)
 				if d != nil {
 					if !diff.ResolveComment(cm, d) && a.args.Template.ReLocationTask != nil {
 						rlStart := time.Now()
-						_, resp, msgs := diff.ReLocateComment(rctx, cm, d, a.args.LLMClient, a.args.Template.ReLocationTask, a.args.Model, a.args.Template.MaxTokens)
+						_, resp, msgs := diff.ReLocateComment(resolveCtx, cm, d, a.args.LLMClient, a.args.Template.ReLocationTask, a.args.Model, a.args.Template.MaxTokens)
 						if msgs != nil {
 							fs := a.session.GetOrCreateFileSession(cm.Path)
 							rlRec := fs.AppendTaskRecord(session.ReLocationTask, msgs)
@@ -1057,7 +1167,7 @@ func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.To
 
 	// Synchronous path for all other tools
 	telemetry.PrintToolCallStarted(t.Name(), args)
-	result, err := p.Execute(ctx, args)
+	result, err := provider.Execute(ctx, args)
 	dur := time.Since(startTime)
 	ok := err == nil
 	telemetry.RecordToolCall(ctx, t.Name(), dur, ok)
@@ -1081,6 +1191,15 @@ func (a *Agent) findDiff(path string) *model.Diff {
 		}
 	}
 	return nil
+}
+
+func validPathsList(m map[string]bool) []string {
+	paths := make([]string, 0, len(m))
+	for p := range m {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // collectPendingComments waits for any async workers then returns aggregated comments from the collector.

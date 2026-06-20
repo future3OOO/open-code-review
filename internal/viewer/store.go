@@ -219,10 +219,12 @@ type FileTokenUsage struct {
 	CacheWriteTokens int
 }
 
-// FileGroup aggregates records for a single file.
+// FileGroup aggregates records for a single file or a multi-file group.
 type FileGroup struct {
-	FilePath string
-	Tasks    map[TaskType][]*TaskCard
+	FilePath    string
+	GroupFiles  []string // non-nil for multi-file groups
+	GroupReason string
+	Tasks       map[TaskType][]*TaskCard
 }
 
 // TaskType mirrors session.TaskType.
@@ -233,6 +235,8 @@ const (
 	MainTask              TaskType = "main_task"
 	MemoryCompressionTask TaskType = "memory_compression_task"
 	ReLocationTask        TaskType = "re_location_task"
+	FileGroupingTask      TaskType = "file_grouping_task"
+	ReviewFilterTask      TaskType = "review_filter_task"
 )
 
 // TaskCard links an LLM request with its response and tool calls.
@@ -248,6 +252,7 @@ type TaskCard struct {
 	CompletionTokens int
 	CacheReadTokens  int
 	CacheWriteTokens int
+	MergedSteps      int // number of intermediate tool-only rounds merged into this card
 }
 
 // ToolCallInfo summarizes a single tool call.
@@ -270,6 +275,11 @@ func LoadSession(root, encodedRepo, sessionID string) (*ViewSession, error) {
 
 	vs := &ViewSession{Files: make([]*FileGroup, 0)}
 	fileIndex := make(map[string]*FileGroup)
+	type groupMeta struct {
+		Files  []string
+		Reason string
+	}
+	groupMetaMap := make(map[string]groupMeta)
 
 	scanner := bufio.NewScanner(f)
 	buf := make([]byte, 0, 1024*1024)
@@ -442,6 +452,29 @@ func LoadSession(root, encodedRepo, sessionID string) (*ViewSession, error) {
 				}
 			}
 
+		case "file_groups":
+			if gs, ok := rec["groups"].([]any); ok {
+				for _, g := range gs {
+					gm, _ := g.(map[string]any)
+					if gm == nil {
+						continue
+					}
+					sk, _ := gm["session_key"].(string)
+					reason, _ := gm["reason"].(string)
+					var files []string
+					if farr, ok := gm["files"].([]any); ok {
+						for _, fv := range farr {
+							if s, ok := fv.(string); ok {
+								files = append(files, s)
+							}
+						}
+					}
+					if sk != "" && len(files) > 0 {
+						groupMetaMap[sk] = groupMeta{Files: files, Reason: reason}
+					}
+				}
+			}
+
 		case "session_end":
 			if dur, ok := rec["duration_seconds"].(float64); ok {
 				vs.Summary.DurationSec = dur
@@ -458,6 +491,54 @@ func LoadSession(root, encodedRepo, sessionID string) (*ViewSession, error) {
 			if f, ok := rec["llm_failures"].(float64); ok {
 				vs.Summary.LLMFailures = int(f)
 			}
+		}
+	}
+
+	// Build reverse map: file path → session key (for non-primary group members)
+	filesToSessionKey := make(map[string]string)
+	for sk, meta := range groupMetaMap {
+		for _, f := range meta.Files {
+			if f != sk {
+				filesToSessionKey[f] = sk
+			}
+		}
+	}
+
+	// Merge non-primary group members' tasks into the session key's FileGroup
+	for _, fg := range vs.Files {
+		if sk, ok := filesToSessionKey[fg.FilePath]; ok {
+			target := fileIndex[sk]
+			if target == nil {
+				target = &FileGroup{FilePath: sk, Tasks: make(map[TaskType][]*TaskCard)}
+				fileIndex[sk] = target
+				vs.Files = append(vs.Files, target)
+			}
+			for tt, cards := range fg.Tasks {
+				target.Tasks[tt] = append(target.Tasks[tt], cards...)
+			}
+			fg.Tasks = nil // mark for removal
+		}
+	}
+
+	// Remove merged entries and attach group metadata
+	n := 0
+	for _, fg := range vs.Files {
+		if fg.Tasks == nil {
+			continue
+		}
+		if meta, ok := groupMetaMap[fg.FilePath]; ok {
+			fg.GroupFiles = meta.Files
+			fg.GroupReason = meta.Reason
+		}
+		vs.Files[n] = fg
+		n++
+	}
+	vs.Files = vs.Files[:n]
+
+	// Collapse intermediate tool-only agent rounds into the next card with content.
+	for _, fg := range vs.Files {
+		for tt, cards := range fg.Tasks {
+			fg.Tasks[tt] = mergeIntermediateCards(cards)
 		}
 	}
 
@@ -493,4 +574,68 @@ func LoadSession(root, encodedRepo, sessionID string) (*ViewSession, error) {
 
 	vs.Summary.SessionID = sessionID
 	return vs, scanner.Err()
+}
+
+// mergeIntermediateCards collapses consecutive tool-only cards (no text response)
+// into the next card that has response content. This avoids cluttering the viewer
+// with intermediate agent rounds (file_read, code_search, etc.) that have no
+// user-visible output.
+func mergeIntermediateCards(cards []*TaskCard) []*TaskCard {
+	if len(cards) <= 1 {
+		return cards
+	}
+
+	var result []*TaskCard
+	var pending []*TaskCard // intermediate tool-only cards waiting to be merged
+
+	for _, c := range cards {
+		if c.ResponseContent == "" && c.Error == "" {
+			pending = append(pending, c)
+			continue
+		}
+		if len(pending) > 0 {
+			var merged []ToolCallInfo
+			for _, p := range pending {
+				merged = append(merged, p.ToolCalls...)
+				c.PromptTokens += p.PromptTokens
+				c.CompletionTokens += p.CompletionTokens
+				c.CacheReadTokens += p.CacheReadTokens
+				c.CacheWriteTokens += p.CacheWriteTokens
+				c.DurationMs += p.DurationMs
+			}
+			c.ToolCalls = append(merged, c.ToolCalls...)
+			c.MergedSteps = len(pending)
+			pending = nil
+		}
+		result = append(result, c)
+	}
+
+	// Trailing tool-only cards: merge into the last content card if available.
+	if len(pending) > 0 && len(result) > 0 {
+		last := result[len(result)-1]
+		for _, p := range pending {
+			last.ToolCalls = append(last.ToolCalls, p.ToolCalls...)
+			last.PromptTokens += p.PromptTokens
+			last.CompletionTokens += p.CompletionTokens
+			last.CacheReadTokens += p.CacheReadTokens
+			last.CacheWriteTokens += p.CacheWriteTokens
+			last.DurationMs += p.DurationMs
+		}
+		last.MergedSteps += len(pending)
+	} else if len(pending) > 0 {
+		// No content card at all — collapse everything into one card.
+		first := pending[0]
+		for _, p := range pending[1:] {
+			first.ToolCalls = append(first.ToolCalls, p.ToolCalls...)
+			first.PromptTokens += p.PromptTokens
+			first.CompletionTokens += p.CompletionTokens
+			first.CacheReadTokens += p.CacheReadTokens
+			first.CacheWriteTokens += p.CacheWriteTokens
+			first.DurationMs += p.DurationMs
+		}
+		first.MergedSteps = len(pending) - 1
+		result = append(result, first)
+	}
+
+	return result
 }

@@ -92,6 +92,29 @@ func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref str
 	return diffs, nil
 }
 
+// StripDiffHeaders removes the "diff --git" and "index" header lines from
+// a unified diff, keeping all other lines (---, +++, @@, extended headers,
+// and actual content) intact. This reduces token usage when embedding diffs
+// in LLM prompts without losing any review-relevant information.
+func StripDiffHeaders(raw string) string {
+	var out strings.Builder
+	first := true
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.HasPrefix(line, "diff --git ") {
+			continue
+		}
+		if strings.HasPrefix(line, "index ") && strings.Contains(line, "..") {
+			continue
+		}
+		if !first {
+			out.WriteByte('\n')
+		}
+		first = false
+		out.WriteString(line)
+	}
+	return out.String()
+}
+
 // finalizeDiff reads the new file content. When ref is non-empty it uses
 // git show to read the file at that ref; otherwise it reads from disk.
 func finalizeDiff(ctx context.Context, d *model.Diff, repoDir string, ref string, runner *gitcmd.Runner) {

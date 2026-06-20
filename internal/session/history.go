@@ -21,6 +21,7 @@ const (
 	MemoryCompressionTask TaskType = "memory_compression_task"
 	ReLocationTask        TaskType = "re_location_task"
 	ReviewFilterTask      TaskType = "review_filter_task"
+	FileGroupingTask      TaskType = "file_grouping_task"
 )
 
 const (
@@ -45,6 +46,7 @@ type SessionHistory struct {
 	EndTime      time.Time
 	persist      *jsonlWriter
 	FileSessions map[string]*FileSession
+	fileGroups   []FileGroupRecord
 	llmFailures  int64
 }
 
@@ -153,8 +155,17 @@ func (sh *SessionHistory) Finalize() {
 	sh.EndTime = time.Now()
 	p := sh.persist
 	duration := sh.EndTime.Sub(sh.StartTime)
-	filesReviewed := make([]string, 0, len(sh.FileSessions))
+	seen := make(map[string]bool, len(sh.FileSessions))
 	for fp := range sh.FileSessions {
+		seen[fp] = true
+	}
+	for _, g := range sh.fileGroups {
+		for _, f := range g.Files {
+			seen[f] = true
+		}
+	}
+	filesReviewed := make([]string, 0, len(seen))
+	for fp := range seen {
 		filesReviewed = append(filesReviewed, fp)
 	}
 	failures := atomic.LoadInt64(&sh.llmFailures)
@@ -229,10 +240,7 @@ func (tr *TaskRecord) SetResponse(resp *llm.ChatResponse, duration time.Duration
 		return
 	}
 	choice := resp.Choices[0]
-	content := ""
-	if choice.Message.Content != nil {
-		content = *choice.Message.Content
-	}
+	content := resp.Content()
 
 	var promptTokens, completionTokens, cacheReadTokens, cacheWriteTokens int
 	if resp.Usage != nil {
@@ -288,6 +296,18 @@ func (tr *TaskRecord) SetError(err error, duration time.Duration) {
 			p.WriteLLMError(fs.FilePath, tr.Type, tr.RequestNo, err.Error(), duration)
 		}
 		atomic.AddInt64(&fs.session.llmFailures, 1)
+	}
+}
+
+// WriteFileGroups persists multi-file group metadata to the JSONL stream.
+func (sh *SessionHistory) WriteFileGroups(groups []FileGroupRecord) {
+	sh.mu.Lock()
+	sh.fileGroups = append(sh.fileGroups, groups...)
+	p := sh.persist
+	sh.mu.Unlock()
+
+	if p != nil {
+		p.WriteFileGroups(groups)
 	}
 }
 

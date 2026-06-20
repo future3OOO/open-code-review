@@ -3,11 +3,9 @@
 {{change_files}}
 </other_changed_files>
 
-<current_file_path>{{current_file_path}}</current_file_path>
-
-<current_file_diff>
+<pending_review_diff>
 {{diff}}
-</current_file_diff>
+</pending_review_diff>
 
 Current time in the real world: {{current_system_date_time}}
 
@@ -21,5 +19,5 @@ Current time in the real world: {{current_system_date_time}}
 ### Review Plan (Optional)
 {{plan_guidance}}
 
-Now please review the code changes in <current_file_diff>
+Now please review the code changes in <pending_review_diff>
 </user_task>

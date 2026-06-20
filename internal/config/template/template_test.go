@@ -56,7 +56,6 @@ func TestLoadDefault_PlaceholdersPresent(t *testing.T) {
 		content     string
 		placeholder string
 	}{
-		{"MainTask user has current_file_path", tpl.MainTask.Messages[1].Content, "{{current_file_path}}"},
 		{"MainTask user has diff", tpl.MainTask.Messages[1].Content, "{{diff}}"},
 		{"PlanTask system has plan_tools", tpl.PlanTask.Messages[0].Content, "{{plan_tools}}"},
 		{"MemoryCompression user has context", tpl.MemoryCompressionTask.Messages[1].Content, "{{context}}"},

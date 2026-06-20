@@ -18,6 +18,8 @@ type Template struct {
 	PlanModeLineThreshold int              `json:"PLAN_MODE_LINE_THRESHOLD"`
 	ReLocationTask        *LlmConversation `json:"RE_LOCATION_TASK,omitempty"`
 	ReviewFilterTask      *LlmConversation `json:"REVIEW_FILTER_TASK,omitempty"`
+	FileGroupingTask      *LlmConversation `json:"FILE_GROUPING_TASK,omitempty"`
+	GroupingLineThreshold int              `json:"GROUPING_LINE_THRESHOLD"`
 }
 
 //go:embed task_template.json prompts/*
@@ -42,6 +44,8 @@ type templateManifest struct {
 	PlanModeLineThreshold int                   `json:"PLAN_MODE_LINE_THRESHOLD"`
 	ReLocationTask        *manifestConversation `json:"RE_LOCATION_TASK,omitempty"`
 	ReviewFilterTask      *manifestConversation `json:"REVIEW_FILTER_TASK,omitempty"`
+	FileGroupingTask      *manifestConversation `json:"FILE_GROUPING_TASK,omitempty"`
+	GroupingLineThreshold int                   `json:"GROUPING_LINE_THRESHOLD"`
 }
 
 func resolveConversation(m manifestConversation) (LlmConversation, error) {
@@ -102,6 +106,10 @@ func LoadDefault() (*Template, error) {
 	if tpl.ReviewFilterTask, err = resolveOptionalConversation(m.ReviewFilterTask, "REVIEW_FILTER_TASK"); err != nil {
 		return nil, err
 	}
+	if tpl.FileGroupingTask, err = resolveOptionalConversation(m.FileGroupingTask, "FILE_GROUPING_TASK"); err != nil {
+		return nil, err
+	}
+	tpl.GroupingLineThreshold = m.GroupingLineThreshold
 	return &tpl, nil
 }
 
@@ -123,7 +131,7 @@ func resolveLang(lang string) string {
 }
 
 // ApplyLanguage injects a language directive into all system-role messages
-// across MAIN_TASK, PLAN_TASK (if set), and MEMORY_COMPRESSION_TASK.
+// across MAIN_TASK, PLAN_TASK (if set), MEMORY_COMPRESSION_TASK, and FILE_GROUPING_TASK.
 func (t *Template) ApplyLanguage(lang string) {
 	instruction := "\n\nAlways respond in " + resolveLang(lang) + "."
 	applyLanguage(&t.MainTask, instruction)
@@ -131,6 +139,9 @@ func (t *Template) ApplyLanguage(lang string) {
 		applyLanguage(t.PlanTask, instruction)
 	}
 	applyLanguage(&t.MemoryCompressionTask, instruction)
+	if t.FileGroupingTask != nil {
+		applyLanguage(t.FileGroupingTask, instruction)
+	}
 }
 func (t *Template) Validate() error {
 	if t.MaxTokens <= 0 {

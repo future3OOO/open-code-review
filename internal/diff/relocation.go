@@ -38,7 +38,7 @@ func ReLocateComment(
 	messages := make([]llm.Message, 0, len(task.Messages))
 	for _, m := range task.Messages {
 		content := m.Content
-		content = strings.ReplaceAll(content, "{diff}", d.Diff)
+		content = strings.ReplaceAll(content, "{diff}", StripDiffHeaders(d.Diff))
 		content = strings.ReplaceAll(content, "{existing_code}", cm.ExistingCode)
 		content = strings.ReplaceAll(content, "{suggestion_content}", cm.Content)
 		messages = append(messages, llm.NewTextMessage(m.Role, content))

@@ -34,6 +34,10 @@
       "parameters": {
         "type": "object",
         "properties": {
+          "path": {
+            "type": "string",
+            "description": "The file path that these comments target. Use the new file path shown in the diff header."
+          },
           "comments": {
             "type": "array",
             "description": "A list of comments. Each item should contain 'content' and 'existing_code'.",
@@ -61,6 +65,7 @@
           }
         },
         "required": [
+          "path",
           "comments"
         ]
       }
