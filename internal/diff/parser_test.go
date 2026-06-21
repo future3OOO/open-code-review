@@ -131,6 +131,40 @@ index 0000000..1234567
 	}
 }
 
+func TestParseDiffText_NoTrailingNewlines(t *testing.T) {
+	diffText := `diff --git a/a.go b/a.go
+index 1234567..89abcde 100644
+--- a/a.go
++++ b/a.go
+@@ -1,3 +1,3 @@
+ line1
+-line2
++line2 changed
+ line3
+diff --git a/b.json b/b.json
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/b.json
+@@ -0,0 +1,3 @@
++{
++  "key": "value"
++}
+`
+	diffs, err := ParseDiffText(context.Background(), diffText, t.TempDir(), "", nil)
+	if err != nil {
+		t.Fatalf("ParseDiffText: %v", err)
+	}
+	if len(diffs) != 2 {
+		t.Fatalf("expected 2 diffs, got %d", len(diffs))
+	}
+	for i, d := range diffs {
+		if strings.HasSuffix(d.Diff, "\n") {
+			t.Errorf("diffs[%d] (%s) has trailing newline in Diff field", i, d.NewPath)
+		}
+	}
+}
+
 func TestStripDiffHeaders(t *testing.T) {
 	tests := []struct {
 		name string

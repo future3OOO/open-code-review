@@ -37,7 +37,7 @@ func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref str
 		if m := diffHeaderRe.FindStringSubmatch(line); m != nil {
 			// Flush previous diff
 			if current != nil {
-				current.Diff = strings.TrimSuffix(buf.String(), "\n")
+				current.Diff = strings.TrimRight(buf.String(), "\n")
 				finalizeDiff(ctx, current, repoDir, ref, runner)
 				diffs = append(diffs, *current)
 				buf.Reset()
@@ -84,7 +84,7 @@ func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref str
 
 	// Flush last diff
 	if current != nil {
-		current.Diff = strings.TrimSuffix(buf.String(), "\n")
+		current.Diff = strings.TrimRight(buf.String(), "\n")
 		finalizeDiff(ctx, current, repoDir, ref, runner)
 		diffs = append(diffs, *current)
 	}
