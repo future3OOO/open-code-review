@@ -833,3 +833,61 @@ func TestResolveEndpointWithModelOverride_LegacyConfigNoValidation(t *testing.T)
 		t.Errorf("Model = %q, want %q", ep.Model, "any-override-model")
 	}
 }
+
+func TestResolveEndpoint_ClaudeCodeProviderDoesNotRequireAPIKeyOrURL(t *testing.T) {
+	clearAllEnv(t)
+
+	cfg := configFile{
+		Provider: "claude-code",
+		Providers: map[string]providerEntryConfig{
+			"claude-code": {
+				Model: "claude-opus-4-8",
+			},
+		},
+	}
+	data, _ := json.Marshal(cfg)
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(cfgPath, data, 0644)
+
+	ep, err := ResolveEndpoint(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ep.Protocol != "claude-code" {
+		t.Errorf("Protocol = %q, want %q", ep.Protocol, "claude-code")
+	}
+	if ep.URL != "" {
+		t.Errorf("URL = %q, want empty", ep.URL)
+	}
+	if ep.Token != "" {
+		t.Errorf("Token = %q, want empty", ep.Token)
+	}
+	if ep.Model != "claude-opus-4-8" {
+		t.Errorf("Model = %q, want %q", ep.Model, "claude-opus-4-8")
+	}
+}
+
+func TestResolveEndpoint_ClaudeCodePresetWithHTTPProtocolOverrideRequiresAPIKey(t *testing.T) {
+	clearAllEnv(t)
+
+	cfg := configFile{
+		Provider: "claude-code",
+		Providers: map[string]providerEntryConfig{
+			"claude-code": {
+				Protocol: "anthropic",
+				Model:    "claude-opus-4-8",
+			},
+		},
+	}
+	data, _ := json.Marshal(cfg)
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(cfgPath, data, 0644)
+
+	_, err := ResolveEndpoint(cfgPath)
+	if err == nil {
+		t.Fatal("expected missing api_key error")
+	}
+	if !strings.Contains(err.Error(), "has no api_key configured") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

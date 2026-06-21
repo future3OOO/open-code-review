@@ -44,6 +44,17 @@ var registry = []Provider{
 		},
 	},
 	{
+		Name:        "claude-code",
+		DisplayName: "Claude Code CLI",
+		Protocol:    "claude-code",
+		Models: []string{
+			"claude-opus-4-8",
+			"claude-opus-4-7",
+			"claude-opus-4-6",
+			"claude-sonnet-4-6",
+		},
+	},
+	{
 		Name:        "dashscope",
 		DisplayName: "Alibaba DashScope API",
 		Protocol:    "openai",
