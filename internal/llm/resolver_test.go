@@ -259,6 +259,29 @@ func clearAllEnv(t *testing.T) {
 	}
 }
 
+func writeConfigFile(t *testing.T, cfg configFile) string {
+	t.Helper()
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+func writeClaudeCodeProviderConfig(t *testing.T, entry providerEntryConfig) string {
+	t.Helper()
+	return writeConfigFile(t, configFile{
+		Provider: "claude-code",
+		Providers: map[string]providerEntryConfig{
+			"claude-code": entry,
+		},
+	})
+}
+
 func TestResolveEndpoint_ProviderAnthropic(t *testing.T) {
 	clearAllEnv(t)
 
@@ -837,17 +860,9 @@ func TestResolveEndpointWithModelOverride_LegacyConfigNoValidation(t *testing.T)
 func TestResolveEndpoint_ClaudeCodeProviderDoesNotRequireAPIKeyOrURL(t *testing.T) {
 	clearAllEnv(t)
 
-	cfg := configFile{
-		Provider: "claude-code",
-		Providers: map[string]providerEntryConfig{
-			"claude-code": {
-				Model: "claude-opus-4-8",
-			},
-		},
-	}
-	data, _ := json.Marshal(cfg)
-	cfgPath := filepath.Join(t.TempDir(), "config.json")
-	os.WriteFile(cfgPath, data, 0644)
+	cfgPath := writeClaudeCodeProviderConfig(t, providerEntryConfig{
+		Model: "claude-opus-4-8",
+	})
 
 	ep, err := ResolveEndpoint(cfgPath)
 	if err != nil {
@@ -870,18 +885,10 @@ func TestResolveEndpoint_ClaudeCodeProviderDoesNotRequireAPIKeyOrURL(t *testing.
 func TestResolveEndpoint_ClaudeCodePresetWithHTTPProtocolOverrideRequiresAPIKey(t *testing.T) {
 	clearAllEnv(t)
 
-	cfg := configFile{
-		Provider: "claude-code",
-		Providers: map[string]providerEntryConfig{
-			"claude-code": {
-				Protocol: "anthropic",
-				Model:    "claude-opus-4-8",
-			},
-		},
-	}
-	data, _ := json.Marshal(cfg)
-	cfgPath := filepath.Join(t.TempDir(), "config.json")
-	os.WriteFile(cfgPath, data, 0644)
+	cfgPath := writeClaudeCodeProviderConfig(t, providerEntryConfig{
+		Protocol: "anthropic",
+		Model:    "claude-opus-4-8",
+	})
 
 	_, err := ResolveEndpoint(cfgPath)
 	if err == nil {

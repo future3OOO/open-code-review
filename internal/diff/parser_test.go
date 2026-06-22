@@ -130,28 +130,24 @@ index 0000000..1234567
 	}
 }
 
-func TestParseDiffText_SubmodulePointerChangeIsNotReadAsFileContent(t *testing.T) {
-	diffText := `diff --git a/third_party/open-code-review b/third_party/open-code-review
-index 53f9a95..13a757b 160000
---- a/third_party/open-code-review
-+++ b/third_party/open-code-review
-@@ -1 +1 @@
--Subproject commit 53f9a95ae73bed8ac4cabe0900cc53abc6a33fac
-+Subproject commit 13a757bb615c4b2430d8a3e3a41c551b65e4239a
-`
-
-	diffs, err := ParseDiffText(context.Background(), diffText, t.TempDir(), "HEAD", nil)
-	if err != nil {
-		t.Fatalf("ParseDiffText: %v", err)
+func TestParseDiffText_SubmodulePointersAreNotReadAsFileContent(t *testing.T) {
+	cases := []struct {
+		name    string
+		diff    string
+		wantNew bool
+	}{
+		{"modified", "index 53f9a95..13a757b 160000\n--- a/third_party/open-code-review\n+++ b/third_party/open-code-review\n@@ -1 +1 @@\n-Subproject commit old\n+Subproject commit new\n", false},
+		{"new", "new file mode 160000\nindex 0000000..13a757b\n--- /dev/null\n+++ b/third_party/open-code-review\n@@ -0,0 +1 @@\n+Subproject commit new\n", true},
 	}
-	if len(diffs) != 1 {
-		t.Fatalf("expected 1 diff, got %d", len(diffs))
-	}
-	d := diffs[0]
-	if !d.IsBinary {
-		t.Errorf("IsBinary = false, want true for gitlink/submodule pointer")
-	}
-	if d.NewFileContent != "" {
-		t.Errorf("NewFileContent = %q, want empty for gitlink/submodule pointer", d.NewFileContent)
+	for _, tc := range cases {
+		diffText := "diff --git a/third_party/open-code-review b/third_party/open-code-review\n" + tc.diff
+		diffs, err := ParseDiffText(context.Background(), diffText, t.TempDir(), "HEAD", nil)
+		if err != nil || len(diffs) != 1 {
+			t.Fatalf("%s: ParseDiffText err=%v diffs=%d", tc.name, err, len(diffs))
+		}
+		d := diffs[0]
+		if d.IsNew != tc.wantNew || !d.IsBinary || d.NewFileContent != "" {
+			t.Fatalf("%s: got IsNew=%v IsBinary=%v NewFileContent=%q", tc.name, d.IsNew, d.IsBinary, d.NewFileContent)
+		}
 	}
 }

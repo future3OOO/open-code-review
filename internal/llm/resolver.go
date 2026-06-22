@@ -77,7 +77,7 @@ func ResolveEndpointWithModelOverride(configPath, modelOverride string) (Resolve
 }
 
 func endpointComplete(ep ResolvedEndpoint) bool {
-	if ep.Protocol == "claude-code" {
+	if ep.Protocol == protocolClaudeCode {
 		return ep.Model != ""
 	}
 	return ep.URL != "" && ep.Token != "" && ep.Model != ""
@@ -221,7 +221,7 @@ func tryProviderConfig(cfg configFile, modelOverride string) (ResolvedEndpoint, 
 		url = entry.URL
 		protocol = strings.ToLower(entry.Protocol)
 	}
-	if apiKey == "" && protocol != "claude-code" {
+	if apiKey == "" && protocol != protocolClaudeCode {
 		return ResolvedEndpoint{}, false, fmt.Errorf("provider %q has no api_key configured and no environment variable fallback found", cfg.Provider)
 	}
 

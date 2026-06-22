@@ -2,12 +2,15 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/open-code-review/open-code-review/internal/gitcmd"
 )
 
 func TestBuildGrepArgs_WorkspaceMode(t *testing.T) {
@@ -27,16 +30,17 @@ func TestBuildGrepArgs_WorkspaceMode(t *testing.T) {
 
 func TestBuildGrepArgs_CommitMode(t *testing.T) {
 	p := NewCodeSearch(&FileReader{RepoDir: "/tmp", Ref: "abc1234"})
-	args := p.buildGrepArgs("myFunc", false, false, []string{"pkg/"})
+	args := p.buildGrepArgsForRef("myFunc", false, false, []string{"pkg/"}, "abc1234")
 
-	assertContainsInOrder(t, args, "-e", "myFunc", "--end-of-options", "abc1234", "--", "pkg/")
+	assertContainsInOrder(t, args, "-e", "myFunc", "abc1234", "--", "pkg/")
 }
 
-func TestBuildGrepArgs_RefUsesEndOfOptions(t *testing.T) {
+func TestBuildGrepArgs_DoesNotUseUnresolvedRef(t *testing.T) {
 	p := NewCodeSearch(&FileReader{RepoDir: "/tmp", Ref: "-O./pwn.sh"})
 	args := p.buildGrepArgs("myFunc", false, false, nil)
 
-	assertContainsInOrder(t, args, "-e", "myFunc", "--end-of-options", "-O./pwn.sh", "--")
+	assertContainsInOrder(t, args, "-e", "myFunc", "--")
+	assertNotContains(t, args, "-O./pwn.sh")
 }
 
 func TestBuildGrepArgs_PatternStartingWithDash(t *testing.T) {
@@ -207,7 +211,7 @@ func TestGitGrep_OptionLikeRefDoesNotLaunchPager(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result, "unable to resolve revision") && !strings.Contains(result, "Not a valid object name") {
+	if !strings.Contains(result, "resolve revision") && !strings.Contains(result, "unable to resolve revision") && !strings.Contains(result, "Not a valid object name") {
 		t.Fatalf("expected invalid revision error, got: %s", result)
 	}
 	if _, err := os.Stat(proofPath); err == nil {
@@ -265,6 +269,18 @@ func TestGitGrep_InvalidRef_ReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(result, "Error:") {
 		t.Errorf("expected error message for invalid ref, got: %s", result)
+	}
+}
+
+func TestResolveGrepRefRunnerReturnsContextCancellation(t *testing.T) {
+	dir := setupTestRepo(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	p := NewCodeSearch(&FileReader{RepoDir: dir, Ref: "HEAD", Mode: ModeCommit, Runner: gitcmd.New(1)})
+	_, err := p.resolveGrepRef(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
 	}
 }
 
