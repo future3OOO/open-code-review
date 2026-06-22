@@ -129,3 +129,29 @@ index 0000000..1234567
 		t.Errorf("Insertions = %d, want 2", d.Insertions)
 	}
 }
+
+func TestParseDiffText_SubmodulePointerChangeIsNotReadAsFileContent(t *testing.T) {
+	diffText := `diff --git a/third_party/open-code-review b/third_party/open-code-review
+index 53f9a95..13a757b 160000
+--- a/third_party/open-code-review
++++ b/third_party/open-code-review
+@@ -1 +1 @@
+-Subproject commit 53f9a95ae73bed8ac4cabe0900cc53abc6a33fac
++Subproject commit 13a757bb615c4b2430d8a3e3a41c551b65e4239a
+`
+
+	diffs, err := ParseDiffText(context.Background(), diffText, t.TempDir(), "HEAD", nil)
+	if err != nil {
+		t.Fatalf("ParseDiffText: %v", err)
+	}
+	if len(diffs) != 1 {
+		t.Fatalf("expected 1 diff, got %d", len(diffs))
+	}
+	d := diffs[0]
+	if !d.IsBinary {
+		t.Errorf("IsBinary = false, want true for gitlink/submodule pointer")
+	}
+	if d.NewFileContent != "" {
+		t.Errorf("NewFileContent = %q, want empty for gitlink/submodule pointer", d.NewFileContent)
+	}
+}

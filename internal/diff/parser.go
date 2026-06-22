@@ -54,8 +54,13 @@ func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref str
 		switch {
 		case binaryRe.MatchString(line):
 			current.IsBinary = true
+		case strings.HasPrefix(line, "index ") && strings.HasSuffix(line, " 160000"):
+			current.IsBinary = true
 		// Extended header lines (unambiguous: content lines always carry a
 		// leading "+", "-" or " " prefix, so a bare prefix match is safe).
+		case strings.HasPrefix(line, "new file mode 160000"):
+			current.IsNew = true
+			current.IsBinary = true
 		case strings.HasPrefix(line, "new file mode "):
 			current.IsNew = true
 		case strings.HasPrefix(line, "deleted file mode "):
@@ -97,6 +102,9 @@ func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref str
 func finalizeDiff(ctx context.Context, d *model.Diff, repoDir string, ref string, runner *gitcmd.Runner) {
 	if d.IsDeleted || d.NewPath == "/dev/null" {
 		d.NewPath = "/dev/null"
+		return
+	}
+	if d.IsBinary {
 		return
 	}
 	if ref != "" {
