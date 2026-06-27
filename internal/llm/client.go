@@ -199,6 +199,9 @@ func NewLLMClient(ep ResolvedEndpoint) LLMClient {
 		AuthHeader: ep.AuthHeader,
 		ExtraBody:  ep.ExtraBody,
 	}
+	if ep.Protocol == protocolClaudeCode {
+		return NewClaudeCodeClient(cfg)
+	}
 	if ep.Protocol == "anthropic" {
 		return NewAnthropicClient(cfg)
 	}

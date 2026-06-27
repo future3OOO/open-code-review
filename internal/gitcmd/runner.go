@@ -80,7 +80,14 @@ func (r *Runner) RunSplit(ctx context.Context, repoDir string, args ...string) (
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	if cmd.ProcessState != nil && commandKilledByContext(ctx, err, cmd.ProcessState.ExitCode()) {
+		return stdout.String(), stderr.String(), ctx.Err()
+	}
 	return stdout.String(), stderr.String(), err
+}
+
+func commandKilledByContext(ctx context.Context, err error, exitCode int) bool {
+	return ctx.Err() != nil && err != nil && exitCode == -1
 }
 
 // Stream acquires the semaphore, starts a git command, and passes its stdout

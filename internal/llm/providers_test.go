@@ -40,7 +40,7 @@ func TestListProviders_Order(t *testing.T) {
 	if len(providers) < 3 {
 		t.Fatalf("expected at least 3 providers, got %d", len(providers))
 	}
-	expected := []string{"anthropic", "dashscope", "dashscope-tokenplan", "deepseek", "hy-tokenplan", "kimi", "mimo", "minimax", "openai", "tencent-tokenhub", "volcengine", "z-ai"}
+	expected := []string{"anthropic", "claude-code", "dashscope", "dashscope-tokenplan", "deepseek", "hy-tokenplan", "kimi", "mimo", "minimax", "openai", "tencent-tokenhub", "volcengine", "z-ai"}
 	if len(providers) != len(expected) {
 		t.Fatalf("expected %d providers, got %d", len(expected), len(providers))
 	}
@@ -124,5 +124,27 @@ func TestLookupProvider_OpenAIDetails(t *testing.T) {
 	}
 	if p.AuthHeader != "" {
 		t.Errorf("AuthHeader = %q, want empty", p.AuthHeader)
+	}
+}
+
+func TestLookupProvider_ClaudeCodeDetails(t *testing.T) {
+	p, ok := LookupProvider("claude-code")
+	if !ok {
+		t.Fatal("claude-code not found")
+	}
+	if p.Protocol != "claude-code" {
+		t.Errorf("Protocol = %q, want %q", p.Protocol, "claude-code")
+	}
+	if p.BaseURL != "" {
+		t.Errorf("BaseURL = %q, want empty", p.BaseURL)
+	}
+	if p.AuthHeader != "" {
+		t.Errorf("AuthHeader = %q, want empty", p.AuthHeader)
+	}
+	if p.EnvVar != "" {
+		t.Errorf("EnvVar = %q, want empty", p.EnvVar)
+	}
+	if len(p.Models) == 0 || p.Models[0] != "claude-opus-4-8" {
+		t.Errorf("Models = %v, want claude-opus-4-8 first", p.Models)
 	}
 }

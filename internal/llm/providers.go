@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+const protocolClaudeCode = "claude-code"
+
 // Provider holds the preset configuration for a known LLM provider.
 type Provider struct {
 	Name        string
@@ -41,6 +43,17 @@ var registry = []Provider{
 			"gpt-5.5",
 			"gpt-5.4",
 			"gpt-5.4-mini",
+		},
+	},
+	{
+		Name:        "claude-code",
+		DisplayName: "Claude Code CLI",
+		Protocol:    protocolClaudeCode,
+		Models: []string{
+			"claude-opus-4-8",
+			"claude-opus-4-7",
+			"claude-opus-4-6",
+			"claude-sonnet-4-6",
 		},
 	},
 	{

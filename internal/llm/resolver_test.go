@@ -259,6 +259,29 @@ func clearAllEnv(t *testing.T) {
 	}
 }
 
+func writeConfigFile(t *testing.T, cfg configFile) string {
+	t.Helper()
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+func writeClaudeCodeProviderConfig(t *testing.T, entry providerEntryConfig) string {
+	t.Helper()
+	return writeConfigFile(t, configFile{
+		Provider: "claude-code",
+		Providers: map[string]providerEntryConfig{
+			"claude-code": entry,
+		},
+	})
+}
+
 func TestResolveEndpoint_ProviderAnthropic(t *testing.T) {
 	clearAllEnv(t)
 
@@ -831,5 +854,47 @@ func TestResolveEndpointWithModelOverride_LegacyConfigNoValidation(t *testing.T)
 	}
 	if ep.Model != "any-override-model" {
 		t.Errorf("Model = %q, want %q", ep.Model, "any-override-model")
+	}
+}
+
+func TestResolveEndpoint_ClaudeCodeProviderDoesNotRequireAPIKeyOrURL(t *testing.T) {
+	clearAllEnv(t)
+
+	cfgPath := writeClaudeCodeProviderConfig(t, providerEntryConfig{
+		Model: "claude-opus-4-8",
+	})
+
+	ep, err := ResolveEndpoint(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ep.Protocol != "claude-code" {
+		t.Errorf("Protocol = %q, want %q", ep.Protocol, "claude-code")
+	}
+	if ep.URL != "" {
+		t.Errorf("URL = %q, want empty", ep.URL)
+	}
+	if ep.Token != "" {
+		t.Errorf("Token = %q, want empty", ep.Token)
+	}
+	if ep.Model != "claude-opus-4-8" {
+		t.Errorf("Model = %q, want %q", ep.Model, "claude-opus-4-8")
+	}
+}
+
+func TestResolveEndpoint_ClaudeCodePresetWithHTTPProtocolOverrideRequiresAPIKey(t *testing.T) {
+	clearAllEnv(t)
+
+	cfgPath := writeClaudeCodeProviderConfig(t, providerEntryConfig{
+		Protocol: "anthropic",
+		Model:    "claude-opus-4-8",
+	})
+
+	_, err := ResolveEndpoint(cfgPath)
+	if err == nil {
+		t.Fatal("expected missing api_key error")
+	}
+	if !strings.Contains(err.Error(), "has no api_key configured") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

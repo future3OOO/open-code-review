@@ -64,7 +64,7 @@ func ResolveEndpointWithModelOverride(configPath, modelOverride string) (Resolve
 		if err != nil {
 			return ResolvedEndpoint{}, fmt.Errorf("resolve %s: %w", s.name, err)
 		}
-		if ok && ep.URL != "" && ep.Token != "" && ep.Model != "" {
+		if ok && endpointComplete(ep) {
 			if ep.Source == "" {
 				ep.Source = s.name
 			}
@@ -74,6 +74,13 @@ func ResolveEndpointWithModelOverride(configPath, modelOverride string) (Resolve
 	}
 
 	return ResolvedEndpoint{}, fmt.Errorf("no valid LLM endpoint configured; one of OCR_LLM_URL/OCR_LLM_TOKEN/OCR_LLM_MODEL, ~/.opencodereview/config.json, or ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_MODEL must be set")
+}
+
+func endpointComplete(ep ResolvedEndpoint) bool {
+	if ep.Protocol == protocolClaudeCode {
+		return ep.Model != ""
+	}
+	return ep.URL != "" && ep.Token != "" && ep.Model != ""
 }
 
 // tryOCREnv reads OCR-specific environment variables.
@@ -190,10 +197,6 @@ func tryProviderConfig(cfg configFile, modelOverride string) (ResolvedEndpoint, 
 			apiKey = os.Getenv(preset.EnvVar)
 		}
 	}
-	if apiKey == "" {
-		return ResolvedEndpoint{}, false, fmt.Errorf("provider %q has no api_key configured and no environment variable fallback found", cfg.Provider)
-	}
-
 	var url, protocol, authHeader, model string
 	var extraBody map[string]any
 
@@ -217,6 +220,9 @@ func tryProviderConfig(cfg configFile, modelOverride string) (ResolvedEndpoint, 
 		}
 		url = entry.URL
 		protocol = strings.ToLower(entry.Protocol)
+	}
+	if apiKey == "" && protocol != protocolClaudeCode {
+		return ResolvedEndpoint{}, false, fmt.Errorf("provider %q has no api_key configured and no environment variable fallback found", cfg.Provider)
 	}
 
 	if cfg.Model != "" {

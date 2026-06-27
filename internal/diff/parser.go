@@ -19,6 +19,9 @@ var (
 	binaryRe     = regexp.MustCompile(`Binary files `)
 )
 
+// 160000 is git's file mode for gitlinks, used for submodule pointers.
+const gitlinkFileMode = "160000"
+
 // ParseDiffText splits the unified diff text into per-file Diff structs.
 // ref, if non-empty, is a git ref used to read new-file content via
 // git show instead of reading from the working tree.
@@ -54,8 +57,13 @@ func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref str
 		switch {
 		case binaryRe.MatchString(line):
 			current.IsBinary = true
+		case strings.HasPrefix(line, "index ") && strings.HasSuffix(line, " "+gitlinkFileMode):
+			current.IsBinary = true
 		// Extended header lines (unambiguous: content lines always carry a
 		// leading "+", "-" or " " prefix, so a bare prefix match is safe).
+		case strings.HasPrefix(line, "new file mode "+gitlinkFileMode):
+			current.IsNew = true
+			current.IsBinary = true
 		case strings.HasPrefix(line, "new file mode "):
 			current.IsNew = true
 		case strings.HasPrefix(line, "deleted file mode "):
@@ -97,6 +105,9 @@ func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref str
 func finalizeDiff(ctx context.Context, d *model.Diff, repoDir string, ref string, runner *gitcmd.Runner) {
 	if d.IsDeleted || d.NewPath == "/dev/null" {
 		d.NewPath = "/dev/null"
+		return
+	}
+	if d.IsBinary {
 		return
 	}
 	if ref != "" {
