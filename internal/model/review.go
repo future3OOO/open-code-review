@@ -4,6 +4,7 @@ package model
 type LlmComment struct {
 	Path           string `json:"path"`
 	Content        string `json:"content"`
+	Severity       string `json:"severity"`
 	SuggestionCode string `json:"suggestion_code,omitempty"`
 	ExistingCode   string `json:"existing_code,omitempty"`
 	StartLine      int    `json:"start_line"`
