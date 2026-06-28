@@ -4,9 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/open-code-review/open-code-review/internal/model"
 )
+
+const defaultSeverity = "unclassified"
+
+var allowedSeverities = map[string]struct{}{
+	"critical":     {},
+	"high":         {},
+	"medium":       {},
+	"low":          {},
+	"unclassified": {},
+}
 
 // CodeCommentProvider submits review comments to the per-Agent CommentCollector.
 type CodeCommentProvider struct {
@@ -59,6 +70,7 @@ func ParseComments(args map[string]any) ([]model.LlmComment, string) {
 		if content, ok := obj["content"].(string); ok {
 			cm.Content = content
 		}
+		cm.Severity = commentSeverity(obj["severity"])
 		if suggestion, ok := obj["suggestion_code"].(string); ok {
 			cm.SuggestionCode = suggestion
 		}
@@ -79,4 +91,16 @@ func ParseComments(args map[string]any) ([]model.LlmComment, string) {
 		comments = append(comments, cm)
 	}
 	return comments, ""
+}
+
+func commentSeverity(value any) string {
+	severity, ok := value.(string)
+	if !ok {
+		return defaultSeverity
+	}
+	severity = strings.ToLower(strings.TrimSpace(severity))
+	if _, ok := allowedSeverities[severity]; ok {
+		return severity
+	}
+	return defaultSeverity
 }

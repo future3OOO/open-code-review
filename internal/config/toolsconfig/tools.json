@@ -44,6 +44,17 @@
                   "type": "string",
                   "description": "Comment content, typically a brief description of code issues and corresponding suggestions."
                 },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low",
+                    "unclassified"
+                  ],
+                  "description": "Finding severity. Use critical for security, data loss, unsafe execution, secret exposure, or production blockers; high for likely functional defects or merge-blocking reliability risks; medium for real non-blocking risks; low for minor optional concerns; unclassified only when severity cannot be determined."
+                },
                 "existing_code": {
                   "type": "string",
                   "description": "Code snippet used to locate comment position. Only return newly added code lines, should not include deleted code or unchanged code lines. Maintain consistent style with diff code for IDE recognition and mounting in current file."
@@ -55,6 +66,7 @@
               },
               "required": [
                 "content",
+                "severity",
                 "existing_code"
               ]
             }
