@@ -165,7 +165,7 @@ func (c *ClaudeCodeClient) CompletionsWithCtx(ctx context.Context, req ChatReque
 		"--allowedTools",
 		"",
 		"--disallowedTools",
-		"*",
+		"mcp__*",
 		"--output-format",
 		"json",
 		"--json-schema",
