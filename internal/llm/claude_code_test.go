@@ -33,8 +33,11 @@ func TestClaudeCodeClientReturnsToolCallsFromStructuredOutput(t *testing.T) {
 		Tools:    []ToolDef{{Function: FunctionDef{Name: "code_comment", Parameters: map[string]any{"type": "object"}}}},
 	})
 
-	if !containsAll(gotCommand, "claude", "--print", "--model", "claude-opus-4-8", "--permission-mode", "default", "--tools", "", "--allowedTools", "", "--disallowedTools", "*") {
+	if !containsAll(gotCommand, "claude", "--print", "--model", "claude-opus-4-8", "--permission-mode", "default", "--tools", "--allowedTools", "--disallowedTools") {
 		t.Fatalf("unexpected command: %v", gotCommand)
+	}
+	if flagValue(gotCommand, "--tools") != "" || flagValue(gotCommand, "--allowedTools") != "" || flagValue(gotCommand, "--disallowedTools") != "mcp__*" {
+		t.Fatalf("unexpected tool flag values: %v", gotCommand)
 	}
 	if !strings.Contains(gotPrompt, `"untrusted_messages"`) || !strings.Contains(gotPrompt, "Review app.go.") || !strings.Contains(gotPrompt, "code_comment") {
 		t.Fatalf("prompt did not include OCR messages and tools: %s", gotPrompt)
@@ -299,4 +302,13 @@ func containsAll(values []string, required ...string) bool {
 		}
 	}
 	return true
+}
+
+func flagValue(values []string, flag string) string {
+	for i, value := range values {
+		if value == flag && i+1 < len(values) {
+			return values[i+1]
+		}
+	}
+	return ""
 }
