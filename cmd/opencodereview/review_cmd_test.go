@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,6 +157,9 @@ func TestLoadReviewContextRejectsOversizedContext(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "too large") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprint(maxReviewContextBytes)) {
+		t.Fatalf("error does not include size limit: %v", err)
 	}
 }
 

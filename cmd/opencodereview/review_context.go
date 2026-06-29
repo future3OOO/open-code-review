@@ -38,7 +38,7 @@ func loadReviewContext(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("read review context: %w", err)
 	}
 	if len(data) > maxReviewContextBytes {
-		return nil, fmt.Errorf("review context is too large")
+		return nil, fmt.Errorf("review context is too large (limit %d bytes)", maxReviewContextBytes)
 	}
 	var payload reviewContextFile
 	if err := json.Unmarshal(data, &payload); err != nil {
