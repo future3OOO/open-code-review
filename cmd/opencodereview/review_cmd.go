@@ -67,6 +67,10 @@ func runReview(args []string) error {
 	if opts.preview {
 		return runPreview(repoDir, opts, fileFilter)
 	}
+	reviewContext, err := loadReviewContext(opts.reviewContextPath)
+	if err != nil {
+		return err
+	}
 
 	toolEntries, err := toolsconfig.Load(opts.toolConfigPath)
 	if err != nil {
@@ -129,6 +133,7 @@ func runReview(args []string) error {
 		ConcurrentTaskTimeout: opts.perFileTimeout,
 		Model:                 model,
 		Background:            opts.background,
+		ReviewContext:         reviewContext,
 		GitRunner:             gitRunner,
 	})
 
