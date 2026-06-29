@@ -67,6 +67,33 @@ func TestParseReviewFlagsAllowsReviewContextPath(t *testing.T) {
 	}
 }
 
+func TestRunReviewPreviewRejectsMalformedReviewContext(t *testing.T) {
+	repoDir := initReviewTestRepo(t)
+	contextPath := writeReviewContextFile(t, `{`)
+
+	err := runReview([]string{"--repo", repoDir, "--preview", "--review-context", contextPath})
+	if err == nil {
+		t.Fatal("expected malformed review context to be rejected before preview")
+	}
+	if !strings.Contains(err.Error(), "parse review context") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunReviewPreviewAllowsAbsentAndValidReviewContext(t *testing.T) {
+	repoDir := initReviewTestRepo(t)
+	validContextPath := writeReviewContextFile(t, `{"version":1,"paths":{"README.md":{"rendered":"context"}}}`)
+
+	for _, args := range [][]string{
+		{"--repo", repoDir, "--preview"},
+		{"--repo", repoDir, "--preview", "--review-context", validContextPath},
+	} {
+		if err := runReview(args); err != nil {
+			t.Fatalf("runReview(%v): %v", args, err)
+		}
+	}
+}
+
 func TestLoadReviewContextRejectsMalformedContext(t *testing.T) {
 	tests := []struct {
 		name string
@@ -88,6 +115,10 @@ func TestLoadReviewContextRejectsMalformedContext(t *testing.T) {
 			name: "empty path",
 			body: `{"version":1,"paths":{"":{"rendered":"context"}}}`,
 		},
+		{
+			name: "whitespace padded path",
+			body: `{"version":1,"paths":{" src/app.py ":{"rendered":"context"}}}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -100,6 +131,16 @@ func TestLoadReviewContextRejectsMalformedContext(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestLoadReviewContextRejectsNonRegularFile(t *testing.T) {
+	_, err := loadReviewContext(t.TempDir())
+	if err == nil {
+		t.Fatal("expected directory review context to be rejected")
+	}
+	if !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -151,9 +192,44 @@ func TestLoadReviewContextTreatsAbsentAndEmptyAsNoContext(t *testing.T) {
 
 func loadReviewContextBody(t *testing.T, body string) (map[string]string, error) {
 	t.Helper()
+	return loadReviewContext(writeReviewContextFile(t, body))
+}
+
+func writeReviewContextFile(t *testing.T, body string) string {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "context.json")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return loadReviewContext(path)
+	return path
+}
+
+func initReviewTestRepo(t *testing.T) string {
+	t.Helper()
+	repoDir := t.TempDir()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "review@example.com"},
+		{"config", "user.name", "Review Test"},
+	} {
+		runGitForTest(t, repoDir, args...)
+	}
+	readmePath := filepath.Join(repoDir, "README.md")
+	if err := os.WriteFile(readmePath, []byte("review me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"add", "README.md"},
+		{"commit", "-m", "initial"},
+	} {
+		runGitForTest(t, repoDir, args...)
+	}
+	return repoDir
+}
+
+func runGitForTest(t *testing.T, repoDir string, args ...string) {
+	t.Helper()
+	if out, err := runGitCmd(repoDir, args...); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
 }

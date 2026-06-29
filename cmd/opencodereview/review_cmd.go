@@ -52,6 +52,10 @@ func runReview(args []string) error {
 	if err := validateReviewRefs(repoDir, opts); err != nil {
 		return err
 	}
+	reviewContext, err := loadReviewContext(opts.reviewContextPath)
+	if err != nil {
+		return err
+	}
 
 	if opts.commit != "" && opts.background == "" {
 		if msg, err := getCommitMessage(repoDir, opts.commit); err == nil && msg != "" {
@@ -66,10 +70,6 @@ func runReview(args []string) error {
 
 	if opts.preview {
 		return runPreview(repoDir, opts, fileFilter)
-	}
-	reviewContext, err := loadReviewContext(opts.reviewContextPath)
-	if err != nil {
-		return err
 	}
 
 	toolEntries, err := toolsconfig.Load(opts.toolConfigPath)
