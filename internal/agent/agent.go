@@ -48,6 +48,9 @@ type Args struct {
 	// When nil, only the default extension and path filters apply.
 	FileFilter *rules.FileFilter
 
+	// IncludeMarkdown lets an explicit caller widen the default extension filter.
+	IncludeMarkdown bool
+
 	// LLM client for model inference.
 	LLMClient llm.LLMClient
 

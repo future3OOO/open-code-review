@@ -105,6 +105,7 @@ type reviewOptions struct {
 	audience          string // --audience: "human" (default) or "agent"
 	background        string // --background: optional requirement context
 	reviewContextPath string
+	includeMarkdown   bool
 	model             string // --model: override resolved LLM model for this review
 	concurrency       int
 	perFileTimeout    int
@@ -131,6 +132,7 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	a.StringVar(&opts.audience, "audience", "human", "output audience: human (show progress) or agent (summary only)")
 	a.StringVarP(&opts.background, "background", "b", "", "optional requirement/business context for the review")
 	a.StringVar(&opts.reviewContextPath, "review-context", "", "path to optional per-file review context JSON")
+	a.BoolVar(&opts.includeMarkdown, "include-markdown", false, "include Markdown files in this review")
 	a.StringVar(&opts.model, "model", "", "override LLM model for this review (e.g., claude-opus-4-6)")
 	a.IntVar(&opts.maxTools, "max-tools", 0, "max tool call rounds per file (0 = template default; min 10)")
 	a.IntVar(&opts.maxGitProcs, "max-git-procs", 16, "max concurrent git subprocesses")
@@ -224,6 +226,7 @@ Flags:
   --from string           source ref to start diff from (e.g., 'main')
   --max-tools int         max tool call rounds per file (0 = template default; min 10)
   --model string          override LLM model for this review (e.g., claude-opus-4-6)
+  --include-markdown      include Markdown files in this review
   -p, --preview           preview which files will be reviewed without running the LLM
   --repo string           root directory of the git repository (default: current dir)
   --review-context string path to optional per-file review context JSON

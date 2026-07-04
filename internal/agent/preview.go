@@ -59,7 +59,9 @@ func (a *Agent) whyExcluded(d model.Diff) ExcludeReason {
 	}
 
 	ext := a.extFromPath(path)
-	if ext != "" && !allowedext.IsAllowedExt(ext) {
+	if ext != "" &&
+		!allowedext.IsAllowedExt(ext) &&
+		!(a.args.IncludeMarkdown && ext == ".md") {
 		return ExcludeExtension
 	}
 
