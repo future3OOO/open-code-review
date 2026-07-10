@@ -106,6 +106,8 @@ type AgentWarning struct {
 	Type    string `json:"type"`
 }
 
+func (w AgentWarning) IsIncomplete() bool { return w.Type != "review_context_omitted_token_budget" }
+
 // Agent orchestrates the AI-powered code review.
 type Agent struct {
 	args                  Args
@@ -207,8 +209,8 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 	sort.SliceStable(comments, func(i, j int) bool {
 		left := comments[i]
 		right := comments[j]
-		leftKey := left.Path + "\x00" + left.Severity + "\x00" + left.FailureMode + "\x00" + left.ViolatedContract + "\x00" + left.ExistingCode + "\x00" + left.Content
-		rightKey := right.Path + "\x00" + right.Severity + "\x00" + right.FailureMode + "\x00" + right.ViolatedContract + "\x00" + right.ExistingCode + "\x00" + right.Content
+		leftKey := left.Path + "\x00" + left.Severity + "\x00" + left.FailureMode + "\x00" + left.ViolatedContract + "\x00" + left.ExistingCode + "\x00" + left.Content + "\x00" + fmt.Sprintf("%#v", left)
+		rightKey := right.Path + "\x00" + right.Severity + "\x00" + right.FailureMode + "\x00" + right.ViolatedContract + "\x00" + right.ExistingCode + "\x00" + right.Content + "\x00" + fmt.Sprintf("%#v", right)
 		return leftKey < rightKey
 	})
 	if len(comments) > 0 {

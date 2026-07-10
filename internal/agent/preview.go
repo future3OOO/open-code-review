@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync/atomic"
 
 	allowedext "github.com/open-code-review/open-code-review/internal/config/allowlist"
@@ -56,7 +57,7 @@ func (a *Agent) Coverage() ReviewCoverage {
 	warnings := a.Warnings()
 	reviewed := int(atomic.LoadInt64(&a.reviewedFiles))
 	status := "complete"
-	if a.coverage.ExcludedCount > 0 || reviewed != a.coverage.ReviewableCount || len(warnings) > 0 {
+	if a.coverage.ExcludedCount > 0 || reviewed != a.coverage.ReviewableCount || slices.ContainsFunc(warnings, AgentWarning.IsIncomplete) {
 		status = "incomplete"
 	}
 	return ReviewCoverage{

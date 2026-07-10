@@ -243,6 +243,7 @@ func TestOversizedReviewContextIsOmittedBeforeTokenSkip(t *testing.T) {
 		strings.Repeat("review-context ", 1000),
 		mainTaskTemplate("File {{current_file_path}}\n{{diff}}\n{{requirement_background}}", 100),
 	)
+	agent.coverage.ReviewableCount = 1
 
 	executeReviewContextSubtask(t, agent, client, 1)
 	rendered := capturedRequestText(t, client, 0)
@@ -253,7 +254,7 @@ func TestOversizedReviewContextIsOmittedBeforeTokenSkip(t *testing.T) {
 		t.Fatalf("existing background missing after context omission:\n%s", rendered)
 	}
 	warnings := agent.Warnings()
-	if len(warnings) != 1 || warnings[0].Type != "review_context_omitted_token_budget" {
+	if len(warnings) != 1 || warnings[0].Type != "review_context_omitted_token_budget" || agent.Coverage().Status != "complete" {
 		t.Fatalf("warnings = %#v, want review context omission warning", warnings)
 	}
 }

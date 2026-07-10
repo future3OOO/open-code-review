@@ -41,18 +41,18 @@ func TestSanitizeTerminal(t *testing.T) {
 	}
 }
 
-func TestJSONOutputMarksCoverageWarningIncomplete(t *testing.T) {
-	for _, warnings := range [][]agent.AgentWarning{
-		nil,
-		{{File: "workflow.drawio", Type: "coverage_incomplete", Message: "unsupported_ext"}},
+func TestJSONOutputClassifiesWarnings(t *testing.T) {
+	for _, test := range [][]string{
+		{"review_context_omitted_token_budget", "incomplete", "completed_with_errors", "Some files could not be reviewed due to errors."},
+		{"coverage_incomplete", "complete", "completed_with_errors", "Some files could not be reviewed due to errors."},
+		{"review_context_omitted_token_budget", "complete", "success", "No comments generated. Looks good to me."},
 	} {
 		payload := captureJSONOutput(t, func() error {
-			return outputJSONWithWarnings(nil, warnings, agent.ReviewCoverage{Status: "incomplete", ChangedFiles: 2, EligibleFiles: 1, ReviewedFiles: 1, ExcludedFiles: 1}, 0, 0, 0, 0, 0, time.Second)
+			return outputJSONWithWarnings(nil, []agent.AgentWarning{{Type: test[0]}}, agent.ReviewCoverage{Status: test[1], ChangedFiles: 1, EligibleFiles: 1, ReviewedFiles: 1}, 0, 0, 0, 0, 0, time.Second)
 		})
 		coverage, ok := payload["coverage"].(map[string]any)
-		if !ok || payload["status"] != "completed_with_errors" || coverage["status"] != "incomplete" ||
-			payload["summary"].(map[string]any)["files_reviewed"] != coverage["reviewed_files"] {
-			t.Fatalf("coverage and summary = %#v, want consistent incomplete result", payload)
+		if !ok || payload["status"] != test[2] || payload["message"] != test[3] || coverage["status"] != test[1] || payload["summary"].(map[string]any)["files_reviewed"] != coverage["reviewed_files"] {
+			t.Fatalf("coverage and summary = %#v, want status %q", payload, test[2])
 		}
 	}
 }
@@ -73,6 +73,7 @@ func captureJSONOutput(t *testing.T, output func() error) map[string]any {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { read.Close(); write.Close() })
 	original := os.Stdout
 	os.Stdout = write
 	t.Cleanup(func() { os.Stdout = original })

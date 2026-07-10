@@ -66,10 +66,12 @@ func TestReviewReplayConvergesOnPositivelyVerifiedFindings(t *testing.T) {
 	repoDir := replayRepository(t)
 	comments := []map[string]any{
 		authCandidate(),
+		authCandidate(),
 		candidate("stale cache contract", "medium", "stale authorization is reused", "authorization changes invalidate cached decisions"),
 		candidate("optional rename", "low", "name could be clearer", "optional style preference"),
 		candidate("contradictory prior claim", "high", "allow is always false", "prior thread assertion"),
 	}
+	comments[1]["evidence"] = "authorization is never checked"
 	for run := 0; run < 5; run++ {
 		ordered := append([]map[string]any(nil), comments...)
 		ordered = append(ordered[run:], ordered[:run]...)
@@ -82,7 +84,7 @@ func TestReviewReplayConvergesOnPositivelyVerifiedFindings(t *testing.T) {
 		verdict, _ := json.Marshal(verified)
 		client := &reviewTestClient{responses: reviewResponses(ordered, string(verdict))}
 		findings, agent := runReplay(t, repoDir, client)
-		if len(findings) != 2 || findings[0].Content != "authorization bypass" || findings[1].Content != "stale cache contract" {
+		if len(findings) != 3 || findings[0].Evidence != "allow is set without a check" || findings[1].Evidence != "authorization is never checked" || findings[2].Content != "stale cache contract" {
 			t.Fatalf("run %d findings = %#v", run, findings)
 		}
 		if warnings := agent.Warnings(); len(warnings) != 0 {

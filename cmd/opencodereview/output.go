@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -24,7 +25,7 @@ func outputText(comments []model.LlmComment) {
 }
 
 func hasIncompleteReview(warnings []agent.AgentWarning) bool {
-	return len(warnings) > 0
+	return slices.ContainsFunc(warnings, agent.AgentWarning.IsIncomplete)
 }
 
 func outputTextWithWarnings(comments []model.LlmComment, warnings []agent.AgentWarning) {

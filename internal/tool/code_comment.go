@@ -94,7 +94,7 @@ func ParseComments(args map[string]any) ([]model.LlmComment, string) {
 		if cm.Path == "" || cm.Severity == "" || strings.TrimSpace(cm.Content) == "" ||
 			strings.TrimSpace(cm.FailureMode) == "" || strings.TrimSpace(cm.ViolatedContract) == "" ||
 			strings.TrimSpace(cm.Evidence) == "" || strings.TrimSpace(cm.ExistingCode) == "" {
-			return nil, "Error: every comment requires a valid severity, content, failure_mode, violated_contract, evidence, and existing_code"
+			return nil, "Error: missing top-level 'path' argument or invalid comment: every comment requires a valid severity, content, failure_mode, violated_contract, evidence, and existing_code"
 		}
 
 		comments = append(comments, cm)
