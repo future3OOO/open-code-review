@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 )
 
 const maxReviewContextBytes = 1_000_000
@@ -21,18 +22,18 @@ func loadReviewContext(path string) (map[string]string, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
-	info, err := os.Stat(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("read review context: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat review context: %w", err)
 	}
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("review context must be a regular file")
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("read review context: %w", err)
-	}
-	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxReviewContextBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read review context: %w", err)

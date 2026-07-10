@@ -554,28 +554,37 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) error {
 func (a *Agent) renderMainTaskMessages(newPath, rawDiff, changeFiles, rule, planResult, requirementBackground string) []llm.Message {
 	rawMsgs := a.args.Template.MainTask.Messages
 	messages := make([]llm.Message, 0, len(rawMsgs))
+	replacer := a.newPromptReplacer(
+		newPath, rawDiff, changeFiles, rule,
+		"{{plan_guidance}}", planResult, requirementBackground,
+	)
 	for _, m := range rawMsgs {
 		content := m.Content
-		content = strings.ReplaceAll(content, "{{current_system_date_time}}", a.currentDate)
-		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
-		content = strings.ReplaceAll(content, "{{system_rule}}", rule)
-		content = strings.ReplaceAll(content, "{{change_files}}", changeFiles)
-		content = strings.ReplaceAll(content, "{{diff}}", rawDiff)
 		// Always substitute the {{plan_guidance}} token so the literal placeholder
 		// never leaks into the rendered prompt. When the plan phase produced no
 		// output, strip the surrounding "### Review Plan (Optional)\n…\n\n" wrapper
 		// (any language variant) so the LLM does not see a dangling section header.
-		// Strip MUST run before ReplaceAll: the regex requires the literal
+		// Strip MUST run before substitution: the regex requires the literal
 		// {{plan_guidance}} token to be present; if we replace first, the token
 		// is gone and the wrapper can't be matched.
 		if planResult == "" {
 			content = stripEmptyPlanBlock(content)
 		}
-		content = strings.ReplaceAll(content, "{{plan_guidance}}", planResult)
-		content = strings.ReplaceAll(content, "{{requirement_background}}", requirementBackground)
-		messages = append(messages, llm.NewTextMessage(m.Role, content))
+		messages = append(messages, llm.NewTextMessage(m.Role, replacer.Replace(content)))
 	}
 	return messages
+}
+
+func (a *Agent) newPromptReplacer(newPath, rawDiff, changeFiles, rule, phasePlaceholder, phaseValue, requirementBackground string) *strings.Replacer {
+	return strings.NewReplacer(
+		"{{current_system_date_time}}", a.currentDate,
+		"{{current_file_path}}", newPath,
+		"{{system_rule}}", rule,
+		"{{change_files}}", changeFiles,
+		"{{diff}}", rawDiff,
+		phasePlaceholder, phaseValue,
+		"{{requirement_background}}", requirementBackground,
+	)
 }
 
 // executeReviewFilter runs the REVIEW_FILTER_TASK to remove comments that are
@@ -807,16 +816,15 @@ func (a *Agent) extFromPath(path string) string {
 func (a *Agent) executePlanPhase(ctx context.Context, newPath, rawDiff, changeFiles, rule string) (string, error) {
 	pt := a.args.Template.PlanTask
 	messages := make([]llm.Message, 0, len(pt.Messages))
+	replacer := a.newPromptReplacer(
+		newPath, rawDiff, changeFiles, rule,
+		"{{plan_tools}}", formatToolDefs(a.args.PlanToolDefs), a.requirementBackground(newPath),
+	)
 	for _, m := range pt.Messages {
-		content := m.Content
-		content = strings.ReplaceAll(content, "{{current_system_date_time}}", a.currentDate)
-		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
-		content = strings.ReplaceAll(content, "{{system_rule}}", rule)
-		content = strings.ReplaceAll(content, "{{change_files}}", changeFiles)
-		content = strings.ReplaceAll(content, "{{diff}}", rawDiff)
-		content = strings.ReplaceAll(content, "{{plan_tools}}", formatToolDefs(a.args.PlanToolDefs))
-		content = strings.ReplaceAll(content, "{{requirement_background}}", a.requirementBackground(newPath))
-		messages = append(messages, llm.NewTextMessage(m.Role, content))
+		messages = append(messages, llm.NewTextMessage(m.Role, replacer.Replace(m.Content)))
+	}
+	if tokenCount := countMessagesTokens(messages); tokenCount > a.args.Template.MaxTokens*4/5 {
+		return "", fmt.Errorf("plan prompt tokens (%d) exceed 80%% of max_tokens(%d)", tokenCount, a.args.Template.MaxTokens)
 	}
 
 	fs := a.session.GetOrCreateFileSession(newPath)
