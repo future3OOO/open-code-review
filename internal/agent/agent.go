@@ -48,6 +48,9 @@ type Args struct {
 	// When nil, only the default extension and path filters apply.
 	FileFilter *rules.FileFilter
 
+	// IncludeMarkdown lets an explicit caller widen the default extension filter.
+	IncludeMarkdown bool
+
 	// LLM client for model inference.
 	LLMClient llm.LLMClient
 
@@ -84,6 +87,10 @@ type Args struct {
 	// Background is an optional requirement/business context string
 	// injected into plan and main_task prompts via {{requirement_background}}.
 	Background string
+
+	// ReviewContext maps file paths to rendered prior review-thread context.
+	// When a file has no entry, prompt rendering is unchanged.
+	ReviewContext map[string]string
 
 	// Model is the user-configured model name used as fallback when
 	// template phases (plan/memory_compression) don't specify one.
@@ -264,6 +271,17 @@ func (a *Agent) FilesReviewed() int64 {
 // Diffs returns the parsed diffs loaded by the agent.
 func (a *Agent) Diffs() []model.Diff {
 	return a.diffs
+}
+
+func (a *Agent) requirementBackground(path string) string {
+	reviewContext := strings.TrimSpace(a.args.ReviewContext[path])
+	if reviewContext == "" {
+		return a.args.Background
+	}
+	if strings.TrimSpace(a.args.Background) == "" {
+		return "Prior unresolved review thread context for this file:\n" + reviewContext
+	}
+	return a.args.Background + "\n\nPrior unresolved review thread context for this file:\n" + reviewContext
 }
 
 // TotalTokensUsed returns PromptTokens + CompletionTokens across all LLM calls.
@@ -458,6 +476,7 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) error {
 	}
 
 	newPath := d.NewPath
+	requirementBackground := a.requirementBackground(newPath)
 
 	// Build change-files list excluding current file
 	changeFilesExcludingCurrent := a.buildChangeFilesExcept(newPath)
@@ -491,33 +510,26 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) error {
 		return fmt.Errorf("main_task.messages is empty in template")
 	}
 
-	rawMsgs := a.args.Template.MainTask.Messages
-	messages := make([]llm.Message, 0, len(rawMsgs))
-	for _, m := range rawMsgs {
-		content := m.Content
-		content = strings.ReplaceAll(content, "{{current_system_date_time}}", a.currentDate)
-		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
-		content = strings.ReplaceAll(content, "{{system_rule}}", rule)
-		content = strings.ReplaceAll(content, "{{change_files}}", changeFilesExcludingCurrent)
-		content = strings.ReplaceAll(content, "{{diff}}", d.Diff)
-		content = strings.ReplaceAll(content, "{{requirement_background}}", a.args.Background)
-		// Always substitute the {{plan_guidance}} token so the literal placeholder
-		// never leaks into the rendered prompt. When the plan phase produced no
-		// output, strip the surrounding "### Review Plan (Optional)\n…\n\n" wrapper
-		// (any language variant) so the LLM does not see a dangling section header.
-		// Strip MUST run before ReplaceAll: the regex requires the literal
-		// {{plan_guidance}} token to be present; if we replace first, the token
-		// is gone and the wrapper can't be matched.
-		if planResult == "" {
-			content = stripEmptyPlanBlock(content)
-		}
-		content = strings.ReplaceAll(content, "{{plan_guidance}}", planResult)
-		messages = append(messages, llm.NewTextMessage(m.Role, content))
-	}
+	messages := a.renderMainTaskMessages(newPath, d.Diff, changeFilesExcludingCurrent, rule, planResult, requirementBackground)
 
 	tokenCount := countMessagesTokens(messages)
 	maxAllowed := a.args.Template.MaxTokens
 	tokenLimit := maxAllowed * 4 / 5 // 80% of MaxTokens
+	if tokenCount > tokenLimit && strings.TrimSpace(a.args.ReviewContext[newPath]) != "" {
+		degradedMessages := a.renderMainTaskMessages(newPath, d.Diff, changeFilesExcludingCurrent, rule, planResult, a.args.Background)
+		degradedTokenCount := countMessagesTokens(degradedMessages)
+		if degradedTokenCount <= tokenLimit {
+			msg := fmt.Sprintf("review context omitted because prompt tokens (%d) exceed %d%% of max_tokens(%d)", tokenCount, 80, maxAllowed)
+			fmt.Fprintf(stdout.Writer(), "[ocr] WARNING: %s for %s\n", msg, newPath)
+			a.recordWarning("review_context_omitted_token_budget", newPath, msg)
+			telemetry.Event(ctx, "review_context.omitted.token_budget",
+				telemetry.AnyToAttr("file.path", newPath),
+				telemetry.AnyToAttr("tokens", tokenCount),
+				telemetry.AnyToAttr("max_tokens", maxAllowed))
+			messages = degradedMessages
+			tokenCount = degradedTokenCount
+		}
+	}
 	if tokenCount > tokenLimit {
 		msg := fmt.Sprintf("prompt tokens (%d) exceed %d%% of max_tokens(%d)", tokenCount, 80, maxAllowed)
 		fmt.Fprintf(stdout.Writer(), "[ocr] WARNING: %s for %s\n", msg, newPath)
@@ -537,6 +549,42 @@ func (a *Agent) executeSubtask(ctx context.Context, d model.Diff) error {
 		a.executeReviewFilter(ctx, d, newPath)
 	}
 	return err
+}
+
+func (a *Agent) renderMainTaskMessages(newPath, rawDiff, changeFiles, rule, planResult, requirementBackground string) []llm.Message {
+	rawMsgs := a.args.Template.MainTask.Messages
+	messages := make([]llm.Message, 0, len(rawMsgs))
+	replacer := a.newPromptReplacer(
+		newPath, rawDiff, changeFiles, rule,
+		"{{plan_guidance}}", planResult, requirementBackground,
+	)
+	for _, m := range rawMsgs {
+		content := m.Content
+		// Always substitute the {{plan_guidance}} token so the literal placeholder
+		// never leaks into the rendered prompt. When the plan phase produced no
+		// output, strip the surrounding "### Review Plan (Optional)\n…\n\n" wrapper
+		// (any language variant) so the LLM does not see a dangling section header.
+		// Strip MUST run before substitution: the regex requires the literal
+		// {{plan_guidance}} token to be present; if we replace first, the token
+		// is gone and the wrapper can't be matched.
+		if planResult == "" {
+			content = stripEmptyPlanBlock(content)
+		}
+		messages = append(messages, llm.NewTextMessage(m.Role, replacer.Replace(content)))
+	}
+	return messages
+}
+
+func (a *Agent) newPromptReplacer(newPath, rawDiff, changeFiles, rule, phasePlaceholder, phaseValue, requirementBackground string) *strings.Replacer {
+	return strings.NewReplacer(
+		"{{current_system_date_time}}", a.currentDate,
+		"{{current_file_path}}", newPath,
+		"{{system_rule}}", rule,
+		"{{change_files}}", changeFiles,
+		"{{diff}}", rawDiff,
+		phasePlaceholder, phaseValue,
+		"{{requirement_background}}", requirementBackground,
+	)
 }
 
 // executeReviewFilter runs the REVIEW_FILTER_TASK to remove comments that are
@@ -768,16 +816,15 @@ func (a *Agent) extFromPath(path string) string {
 func (a *Agent) executePlanPhase(ctx context.Context, newPath, rawDiff, changeFiles, rule string) (string, error) {
 	pt := a.args.Template.PlanTask
 	messages := make([]llm.Message, 0, len(pt.Messages))
+	replacer := a.newPromptReplacer(
+		newPath, rawDiff, changeFiles, rule,
+		"{{plan_tools}}", formatToolDefs(a.args.PlanToolDefs), a.requirementBackground(newPath),
+	)
 	for _, m := range pt.Messages {
-		content := m.Content
-		content = strings.ReplaceAll(content, "{{current_system_date_time}}", a.currentDate)
-		content = strings.ReplaceAll(content, "{{current_file_path}}", newPath)
-		content = strings.ReplaceAll(content, "{{system_rule}}", rule)
-		content = strings.ReplaceAll(content, "{{change_files}}", changeFiles)
-		content = strings.ReplaceAll(content, "{{diff}}", rawDiff)
-		content = strings.ReplaceAll(content, "{{requirement_background}}", a.args.Background)
-		content = strings.ReplaceAll(content, "{{plan_tools}}", formatToolDefs(a.args.PlanToolDefs))
-		messages = append(messages, llm.NewTextMessage(m.Role, content))
+		messages = append(messages, llm.NewTextMessage(m.Role, replacer.Replace(m.Content)))
+	}
+	if tokenCount := countMessagesTokens(messages); tokenCount > a.args.Template.MaxTokens*4/5 {
+		return "", fmt.Errorf("plan prompt tokens (%d) exceed 80%% of max_tokens(%d)", tokenCount, a.args.Template.MaxTokens)
 	}
 
 	fs := a.session.GetOrCreateFileSession(newPath)

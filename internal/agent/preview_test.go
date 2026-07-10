@@ -204,6 +204,32 @@ func TestWhyExcluded_DefaultPathFilter(t *testing.T) {
 	}
 }
 
+func TestWhyExcluded_IncludeMarkdown(t *testing.T) {
+	defaultAgent := New(Args{})
+	markdownAgent := New(Args{IncludeMarkdown: true})
+	excludingAgent := New(Args{
+		IncludeMarkdown: true,
+		FileFilter: &rules.FileFilter{
+			Exclude: []string{"docs/**"},
+		},
+	})
+
+	diff := model.Diff{NewPath: "docs/guide.md"}
+
+	if got := defaultAgent.whyExcluded(diff); got != ExcludeExtension {
+		t.Errorf("default whyExcluded() = %v, want %v", got, ExcludeExtension)
+	}
+	if got := markdownAgent.whyExcluded(diff); got != ExcludeNone {
+		t.Errorf("markdown whyExcluded() = %v, want %v", got, ExcludeNone)
+	}
+	if got := excludingAgent.whyExcluded(diff); got != ExcludeUserRule {
+		t.Errorf("markdown excluded by user rule = %v, want %v", got, ExcludeUserRule)
+	}
+	if got := markdownAgent.whyExcluded(model.Diff{NewPath: "docs/__tests__/guide.md"}); got != ExcludeDefaultPath {
+		t.Errorf("markdown excluded by default path = %v, want %v", got, ExcludeDefaultPath)
+	}
+}
+
 func TestWhyExcluded_UserIncludePattern(t *testing.T) {
 	agent := New(Args{
 		FileFilter: &rules.FileFilter{

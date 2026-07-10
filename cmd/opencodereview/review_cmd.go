@@ -52,6 +52,10 @@ func runReview(args []string) error {
 	if err := validateReviewRefs(repoDir, opts); err != nil {
 		return err
 	}
+	reviewContext, err := loadReviewContext(opts.reviewContextPath)
+	if err != nil {
+		return err
+	}
 
 	if opts.commit != "" && opts.background == "" {
 		if msg, err := getCommitMessage(repoDir, opts.commit); err == nil && msg != "" {
@@ -129,6 +133,8 @@ func runReview(args []string) error {
 		ConcurrentTaskTimeout: opts.perFileTimeout,
 		Model:                 model,
 		Background:            opts.background,
+		ReviewContext:         reviewContext,
+		IncludeMarkdown:       opts.includeMarkdown,
 		GitRunner:             gitRunner,
 	})
 
@@ -252,12 +258,13 @@ func validateReviewRefs(repoDir string, opts reviewOptions) error {
 func runPreview(repoDir string, opts reviewOptions, fileFilter *rules.FileFilter) error {
 	gitRunner := gitcmd.New(opts.maxGitProcs)
 	ag := agent.New(agent.Args{
-		RepoDir:    repoDir,
-		From:       opts.from,
-		To:         opts.to,
-		Commit:     opts.commit,
-		FileFilter: fileFilter,
-		GitRunner:  gitRunner,
+		RepoDir:         repoDir,
+		From:            opts.from,
+		To:              opts.to,
+		Commit:          opts.commit,
+		FileFilter:      fileFilter,
+		IncludeMarkdown: opts.includeMarkdown,
+		GitRunner:       gitRunner,
 	})
 
 	preview, err := ag.Preview(context.Background())
