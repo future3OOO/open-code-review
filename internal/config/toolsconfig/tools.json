@@ -36,7 +36,7 @@
         "properties": {
           "comments": {
             "type": "array",
-            "description": "A list of comments. Each item should contain 'content' and 'existing_code'.",
+            "description": "A list of findings. Each item must contain the concrete failure mode, violated contract, causal evidence, severity, content, and exact existing-code anchor.",
             "items": {
               "type": "object",
               "properties": {
@@ -55,6 +55,18 @@
                   ],
                   "description": "Finding severity. Use critical for security, data loss, unsafe execution, secret exposure, or production blockers; high for likely functional defects or merge-blocking reliability risks; medium for real non-blocking risks; low for minor optional concerns; unclassified only when severity cannot be determined."
                 },
+                "failure_mode": {
+                  "type": "string",
+                  "description": "Concrete behavior that fails when the changed code executes. State the failure, not advice or a possibility."
+                },
+                "violated_contract": {
+                  "type": "string",
+                  "description": "Specific behavior, invariant, API contract, or requirement violated by the failure mode."
+                },
+                "evidence": {
+                  "type": "string",
+                  "description": "Concrete causal evidence tying the exact changed-code anchor to the failure mode and violated contract."
+                },
                 "existing_code": {
                   "type": "string",
                   "description": "Code snippet used to locate comment position. Only return newly added code lines, should not include deleted code or unchanged code lines. Maintain consistent style with diff code for IDE recognition and mounting in current file."
@@ -67,6 +79,9 @@
               "required": [
                 "content",
                 "severity",
+                "failure_mode",
+                "violated_contract",
+                "evidence",
                 "existing_code"
               ]
             }

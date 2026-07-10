@@ -120,6 +120,10 @@ func TestLoadReviewContextRejectsMalformedContext(t *testing.T) {
 			name: "whitespace padded path",
 			body: `{"version":1,"paths":{" src/app.py ":{"rendered":"context"}}}`,
 		},
+		{
+			name: "nested revalidation finding",
+			body: `{"version":1,"paths":{},"revalidate":[{"instance_id":"fi1:auth","family":{},"evidence":{}}]}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -164,24 +168,27 @@ func TestLoadReviewContextRejectsOversizedContext(t *testing.T) {
 }
 
 func TestLoadReviewContextAcceptsFleetContextGraphShape(t *testing.T) {
-	body := `{"version":1,"paths":{"src/app.py":{"rendered":"context for app.py","thread_count":1,"omitted_thread_count":0},"src/z.py":{"rendered":"context for z.py","thread_count":2,"omitted_thread_count":1}},"summary":{"included_threads":3,"omitted_threads":1,"included_comments":4,"omitted_comments":2,"omitted_marker":"[Review context omitted: 1 thread(s) overall.]"}}`
+	body := `{"version":1,"paths":{"src/app.py":{"rendered":"context for app.py","thread_count":1,"omitted_thread_count":0},"src/z.py":{"rendered":"context for z.py","thread_count":2,"omitted_thread_count":1}},"revalidate":[{"instance_id":"fi1:auth","path":"src/app.py","content":"authorization bypass","severity":"high","failure_mode":"unauthorized access","violated_contract":"requests require authorization","evidence":"guard is missing","existing_code":"allow = True","start_line":7,"end_line":7}],"summary":{"included_threads":3,"omitted_threads":1,"included_comments":4,"omitted_comments":2,"omitted_marker":"[Review context omitted: 1 thread(s) overall.]"}}`
 	context, err := loadReviewContextBody(t, body)
 	if err != nil {
 		t.Fatalf("loadReviewContext: %v", err)
 	}
-	if len(context) != 2 {
-		t.Fatalf("context path count = %d", len(context))
+	if len(context.Paths) != 2 {
+		t.Fatalf("context path count = %d", len(context.Paths))
 	}
-	if context["src/app.py"] != "context for app.py" {
-		t.Fatalf("src/app.py context = %q", context["src/app.py"])
+	if context.Paths["src/app.py"] != "context for app.py" {
+		t.Fatalf("src/app.py context = %q", context.Paths["src/app.py"])
 	}
-	if context["src/z.py"] != "context for z.py" {
-		t.Fatalf("src/z.py context = %q", context["src/z.py"])
+	if context.Paths["src/z.py"] != "context for z.py" {
+		t.Fatalf("src/z.py context = %q", context.Paths["src/z.py"])
+	}
+	if len(context.Revalidate) != 1 || context.Revalidate[0].Path != "src/app.py" {
+		t.Fatalf("revalidate = %#v", context.Revalidate)
 	}
 }
 
 func TestLoadReviewContextTreatsAbsentAndEmptyAsNoContext(t *testing.T) {
-	if context, err := loadReviewContext(""); err != nil || context != nil {
+	if context, err := loadReviewContext(""); err != nil || len(context.Paths) != 0 || len(context.Revalidate) != 0 {
 		t.Fatalf("absent context = %#v, %v", context, err)
 	}
 
@@ -189,12 +196,17 @@ func TestLoadReviewContextTreatsAbsentAndEmptyAsNoContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadReviewContext: %v", err)
 	}
-	if context != nil {
-		t.Fatalf("empty context = %#v, want nil", context)
+	if len(context.Paths) != 0 || len(context.Revalidate) != 0 {
+		t.Fatalf("empty context = %#v", context)
+	}
+
+	context, err = loadReviewContextBody(t, `{"version":1,"paths":{},"revalidate":[{"instance_id":"fi1:auth","path":"src/app.py","content":"authorization bypass","severity":"high","failure_mode":"unauthorized access","violated_contract":"requests require authorization","evidence":"guard is missing","existing_code":"allow = True","start_line":7,"end_line":7}]}`)
+	if err != nil || len(context.Revalidate) != 1 {
+		t.Fatalf("revalidation-only context = %#v, %v", context, err)
 	}
 }
 
-func loadReviewContextBody(t *testing.T, body string) (map[string]string, error) {
+func loadReviewContextBody(t *testing.T, body string) (reviewContextInput, error) {
 	t.Helper()
 	return loadReviewContext(writeReviewContextFile(t, body))
 }

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	allowedext "github.com/open-code-review/open-code-review/internal/config/allowlist"
 	"github.com/open-code-review/open-code-review/internal/model"
@@ -40,11 +41,42 @@ type DiffPreview struct {
 	ExcludedCount   int                `json:"excluded_count"`
 }
 
+// ReviewCoverage reports whether every changed file was reviewed or explicitly excluded.
+type ReviewCoverage struct {
+	Status        string             `json:"status"`
+	ChangedFiles  int                `json:"changed_files"`
+	EligibleFiles int                `json:"eligible_files"`
+	ReviewedFiles int                `json:"reviewed_files"`
+	ExcludedFiles int                `json:"excluded_files"`
+	Files         []DiffPreviewEntry `json:"files"`
+}
+
+// Coverage returns the changed-file inventory and overall completeness.
+func (a *Agent) Coverage() ReviewCoverage {
+	warnings := a.Warnings()
+	reviewed := int(atomic.LoadInt64(&a.reviewedFiles))
+	status := "complete"
+	if a.coverage.ExcludedCount > 0 || reviewed != a.coverage.ReviewableCount || len(warnings) > 0 {
+		status = "incomplete"
+	}
+	return ReviewCoverage{
+		Status:        status,
+		ChangedFiles:  a.coverage.TotalFiles,
+		EligibleFiles: a.coverage.ReviewableCount,
+		ReviewedFiles: reviewed,
+		ExcludedFiles: a.coverage.ExcludedCount,
+		Files:         append([]DiffPreviewEntry(nil), a.coverage.Entries...),
+	}
+}
+
 // whyExcluded applies the filter algorithm as shouldReview but
 // returns the specific reason a file is excluded.
 func (a *Agent) whyExcluded(d model.Diff) ExcludeReason {
 	if d.IsBinary {
 		return ExcludeBinary
+	}
+	if d.IsDeleted {
+		return ExcludeDeleted
 	}
 
 	path := effectivePath(d)
@@ -78,8 +110,12 @@ func (a *Agent) Preview(ctx context.Context) (*DiffPreview, error) {
 	if err := a.loadDiffs(ctx); err != nil {
 		return nil, fmt.Errorf("load diffs: %w", err)
 	}
+	result := a.previewLoadedDiffs()
+	return &result, nil
+}
 
-	result := &DiffPreview{
+func (a *Agent) previewLoadedDiffs() DiffPreview {
+	result := DiffPreview{
 		TotalInsertions: a.totalInsertions,
 		TotalDeletions:  a.totalDeletions,
 		TotalFiles:      len(a.diffs),
@@ -95,10 +131,6 @@ func (a *Agent) Preview(ctx context.Context) (*DiffPreview, error) {
 		}
 
 		reason := a.whyExcluded(d)
-		if reason == ExcludeNone && d.IsDeleted {
-			reason = ExcludeDeleted
-		}
-
 		entry.WillReview = reason == ExcludeNone
 		entry.ExcludeReason = reason
 
@@ -111,7 +143,7 @@ func (a *Agent) Preview(ctx context.Context) (*DiffPreview, error) {
 		result.Entries = append(result.Entries, entry)
 	}
 
-	return result, nil
+	return result
 }
 
 func effectivePath(d model.Diff) string {

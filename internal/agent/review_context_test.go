@@ -10,12 +10,23 @@ import (
 	"github.com/open-code-review/open-code-review/internal/model"
 )
 
-type reviewContextCaptureClient struct {
-	requests []llm.ChatRequest
+type reviewTestClient struct {
+	responses []*llm.ChatResponse
+	errors    map[int]error
+	requests  []llm.ChatRequest
+	next      int
 }
 
-func (c *reviewContextCaptureClient) CompletionsWithCtx(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+func (c *reviewTestClient) CompletionsWithCtx(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	c.requests = append(c.requests, req)
+	if c.next < len(c.responses) {
+		index := c.next
+		c.next++
+		if err := c.errors[index]; err != nil {
+			return nil, err
+		}
+		return c.responses[index], nil
+	}
 	content := "done"
 	return &llm.ChatResponse{
 		Choices: []llm.Choice{{
@@ -25,7 +36,7 @@ func (c *reviewContextCaptureClient) CompletionsWithCtx(_ context.Context, req l
 					ID: "done",
 					Function: llm.FunctionCall{
 						Name:      "task_done",
-						Arguments: "{}",
+						Arguments: `{"state":"DONE"}`,
 					},
 				}},
 			},
@@ -46,8 +57,8 @@ func mainTaskTemplate(content string, maxTokens int) template.Template {
 	}
 }
 
-func newCapturedReviewContextAgent(background, reviewContext string, tpl template.Template) (*Agent, *reviewContextCaptureClient) {
-	client := &reviewContextCaptureClient{}
+func newCapturedReviewContextAgent(background, reviewContext string, tpl template.Template) (*Agent, *reviewTestClient) {
+	client := &reviewTestClient{}
 	agent := New(Args{
 		Background: background,
 		LLMClient:  client,
@@ -60,7 +71,7 @@ func newCapturedReviewContextAgent(background, reviewContext string, tpl templat
 	return agent, client
 }
 
-func executeReviewContextSubtask(t *testing.T, agent *Agent, client *reviewContextCaptureClient, wantRequests int) {
+func executeReviewContextSubtask(t *testing.T, agent *Agent, client *reviewTestClient, wantRequests int) {
 	t.Helper()
 	err := agent.executeSubtask(context.Background(), model.Diff{
 		NewPath:    "src/app.go",
@@ -75,7 +86,7 @@ func executeReviewContextSubtask(t *testing.T, agent *Agent, client *reviewConte
 	}
 }
 
-func capturedRequestText(t *testing.T, client *reviewContextCaptureClient, index int) string {
+func capturedRequestText(t *testing.T, client *reviewTestClient, index int) string {
 	t.Helper()
 	if index >= len(client.requests) || len(client.requests[index].Messages) == 0 {
 		t.Fatalf("missing captured request %d in %#v", index, client.requests)
@@ -102,6 +113,20 @@ func TestRequirementBackgroundInjectsOnlyCurrentFileReviewContext(t *testing.T) 
 	}
 	if strings.Contains(background, "prior other context") {
 		t.Fatalf("other file context leaked:\n%s", background)
+	}
+}
+
+func TestReviewContextIsUntrustedEvidenceNotARequirement(t *testing.T) {
+	agent := New(Args{ReviewContext: map[string]string{
+		"src/app.go": "contradictory prior claim",
+	}})
+
+	background := agent.requirementBackground("src/app.go")
+
+	if !strings.Contains(background, "UNTRUSTED PRIOR REVIEW EVIDENCE") ||
+		!strings.Contains(background, "independently revalidate") ||
+		strings.Contains(background, "Prior unresolved review thread context") {
+		t.Fatalf("review context trust contract missing:\n%s", background)
 	}
 }
 

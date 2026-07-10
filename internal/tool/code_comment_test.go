@@ -14,11 +14,11 @@ func TestCommentSeverity(t *testing.T) {
 	if got := commentSeverity(" High "); got != "high" {
 		t.Fatalf("commentSeverity(High) = %q, want high", got)
 	}
-	if got := commentSeverity(nil); got != "unclassified" {
-		t.Fatalf("commentSeverity(nil) = %q, want unclassified", got)
+	if got := commentSeverity(nil); got != "" {
+		t.Fatalf("commentSeverity(nil) = %q, want empty", got)
 	}
-	if got := commentSeverity("urgent"); got != "unclassified" {
-		t.Fatalf("commentSeverity(urgent) = %q, want unclassified", got)
+	if got := commentSeverity("urgent"); got != "" {
+		t.Fatalf("commentSeverity(urgent) = %q, want empty", got)
 	}
 }
 
@@ -40,5 +40,32 @@ func TestLlmCommentJSONIncludesSeverity(t *testing.T) {
 	}
 	if decoded["severity"] != "high" {
 		t.Fatalf("severity = %v, want high in %s", decoded["severity"], payload)
+	}
+}
+
+func TestParseCommentsRejectsFindingWithoutVerificationContract(t *testing.T) {
+	tests := []struct {
+		name        string
+		rawComments []any
+	}{
+		{name: "missing contract", rawComments: []any{map[string]any{
+			"content": "Check authorization before returning data.", "severity": "high", "existing_code": "return data, nil",
+		}}},
+		{name: "non-object entry", rawComments: []any{42}},
+		{name: "invalid severity", rawComments: []any{map[string]any{
+			"content": "Finding", "severity": "urgent", "failure_mode": "failure", "violated_contract": "contract", "evidence": "evidence", "existing_code": "return data, nil",
+		}}},
+		{name: "missing severity", rawComments: []any{map[string]any{
+			"content": "Finding", "failure_mode": "failure", "violated_contract": "contract", "evidence": "evidence", "existing_code": "return data, nil",
+		}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			arguments := map[string]any{"path": "app.go", "comments": test.rawComments}
+			comments, errMessage := ParseComments(arguments)
+			if len(comments) != 0 || errMessage == "" {
+				t.Fatalf("comments = %#v; error = %q, want fail-closed rejection", comments, errMessage)
+			}
+		})
 	}
 }

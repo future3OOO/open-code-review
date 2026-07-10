@@ -467,6 +467,11 @@ func TestShouldReview(t *testing.T) {
 			},
 			expected: false,
 		},
+		{
+			name:     "deleted file should not be reviewed",
+			diff:     model.Diff{OldPath: "main.go", NewPath: "/dev/null", IsDeleted: true},
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -476,6 +481,10 @@ func TestShouldReview(t *testing.T) {
 				t.Errorf("shouldReview() = %v, want %v", got, tt.expected)
 			}
 		})
+	}
+	agent.args.FileFilter = &rules.FileFilter{Include: []string{"*.go"}}
+	if agent.shouldReview(model.Diff{OldPath: "main.go", NewPath: "/dev/null", IsDeleted: true}) {
+		t.Error("include rule resurrected a deleted file")
 	}
 }
 

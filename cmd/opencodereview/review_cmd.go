@@ -128,12 +128,12 @@ func runReview(args []string) error {
 		PlanToolDefs:          planToolDefs,
 		MainToolDefs:          mainToolDefs,
 		CommentCollector:      collector,
-		CommentWorkerPool:     agent.NewCommentWorkerPool(opts.concurrency),
 		MaxConcurrency:        opts.concurrency,
 		ConcurrentTaskTimeout: opts.perFileTimeout,
 		Model:                 model,
 		Background:            opts.background,
-		ReviewContext:         reviewContext,
+		ReviewContext:         reviewContext.Paths,
+		Revalidate:            reviewContext.Revalidate,
 		IncludeMarkdown:       opts.includeMarkdown,
 		GitRunner:             gitRunner,
 	})
@@ -171,7 +171,7 @@ func runReview(args []string) error {
 
 	// If no files were reviewed (e.g. workspace has no changes), inform the caller in JSON mode.
 	if opts.outputFormat == "json" && len(comments) == 0 && ag.FilesReviewed() == 0 {
-		return outputJSONNoFiles()
+		return outputJSONNoFiles(ag.Coverage(), ag.Warnings())
 	}
 
 	// In agent mode (text output), restore stdout so Summary reaches the terminal.
@@ -185,7 +185,7 @@ func runReview(args []string) error {
 	}
 
 	if opts.outputFormat == "json" {
-		return outputJSONWithWarnings(comments, ag.Warnings(), ag.FilesReviewed(), ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(), ag.TotalCacheReadTokens(), ag.TotalCacheWriteTokens(), duration)
+		return outputJSONWithWarnings(comments, ag.Warnings(), ag.Coverage(), ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(), ag.TotalCacheReadTokens(), ag.TotalCacheWriteTokens(), duration)
 	}
 	if opts.audience == "agent" {
 		outputTextWithWarnings(comments, ag.Warnings())
