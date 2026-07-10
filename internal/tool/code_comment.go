@@ -9,8 +9,6 @@ import (
 	"github.com/open-code-review/open-code-review/internal/model"
 )
 
-const defaultSeverity = "unclassified"
-
 var allowedSeverities = map[string]struct{}{
 	"critical":     {},
 	"high":         {},
@@ -62,7 +60,7 @@ func ParseComments(args map[string]any) ([]model.LlmComment, string) {
 	for _, raw := range rawComments {
 		obj, ok := raw.(map[string]any)
 		if !ok {
-			continue
+			return nil, "Error: every comment must be an object"
 		}
 
 		cm := model.LlmComment{}
@@ -71,6 +69,15 @@ func ParseComments(args map[string]any) ([]model.LlmComment, string) {
 			cm.Content = content
 		}
 		cm.Severity = commentSeverity(obj["severity"])
+		if failureMode, ok := obj["failure_mode"].(string); ok {
+			cm.FailureMode = failureMode
+		}
+		if contract, ok := obj["violated_contract"].(string); ok {
+			cm.ViolatedContract = contract
+		}
+		if evidence, ok := obj["evidence"].(string); ok {
+			cm.Evidence = evidence
+		}
 		if suggestion, ok := obj["suggestion_code"].(string); ok {
 			cm.SuggestionCode = suggestion
 		}
@@ -84,8 +91,10 @@ func ParseComments(args map[string]any) ([]model.LlmComment, string) {
 			cm.Path = path
 		}
 
-		if cm.Path == "" || cm.Content == "" {
-			continue
+		if cm.Path == "" || cm.Severity == "" || strings.TrimSpace(cm.Content) == "" ||
+			strings.TrimSpace(cm.FailureMode) == "" || strings.TrimSpace(cm.ViolatedContract) == "" ||
+			strings.TrimSpace(cm.Evidence) == "" || strings.TrimSpace(cm.ExistingCode) == "" {
+			return nil, "Error: missing top-level 'path' argument or invalid comment: every comment requires a valid severity, content, failure_mode, violated_contract, evidence, and existing_code"
 		}
 
 		comments = append(comments, cm)
@@ -96,11 +105,11 @@ func ParseComments(args map[string]any) ([]model.LlmComment, string) {
 func commentSeverity(value any) string {
 	severity, ok := value.(string)
 	if !ok {
-		return defaultSeverity
+		return ""
 	}
 	severity = strings.ToLower(strings.TrimSpace(severity))
 	if _, ok := allowedSeverities[severity]; ok {
 		return severity
 	}
-	return defaultSeverity
+	return ""
 }

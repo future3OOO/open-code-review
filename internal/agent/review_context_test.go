@@ -10,17 +10,24 @@ import (
 	"github.com/open-code-review/open-code-review/internal/model"
 )
 
-type reviewContextCaptureClient struct {
+type reviewTestClient struct {
+	responses []*llm.ChatResponse
+	errors    map[int]error
 	requests  []llm.ChatRequest
-	responses []string
+	next      int
 }
 
-func (c *reviewContextCaptureClient) CompletionsWithCtx(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+func (c *reviewTestClient) CompletionsWithCtx(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	c.requests = append(c.requests, req)
-	content := "done"
-	if len(c.responses) >= len(c.requests) {
-		content = c.responses[len(c.requests)-1]
+	if c.next < len(c.responses) {
+		index := c.next
+		c.next++
+		if err := c.errors[index]; err != nil {
+			return nil, err
+		}
+		return c.responses[index], nil
 	}
+	content := "done"
 	return &llm.ChatResponse{
 		Choices: []llm.Choice{{
 			Message: llm.ResponseMessage{
@@ -29,7 +36,7 @@ func (c *reviewContextCaptureClient) CompletionsWithCtx(_ context.Context, req l
 					ID: "done",
 					Function: llm.FunctionCall{
 						Name:      "task_done",
-						Arguments: "{}",
+						Arguments: `{"state":"DONE"}`,
 					},
 				}},
 			},
@@ -56,8 +63,8 @@ func setPlanTask(agent *Agent, content string) {
 	}
 }
 
-func newCapturedReviewContextAgent(background, reviewContext string, tpl template.Template) (*Agent, *reviewContextCaptureClient) {
-	client := &reviewContextCaptureClient{}
+func newCapturedReviewContextAgent(background, reviewContext string, tpl template.Template) (*Agent, *reviewTestClient) {
+	client := &reviewTestClient{}
 	agent := New(Args{
 		Background: background,
 		LLMClient:  client,
@@ -70,7 +77,7 @@ func newCapturedReviewContextAgent(background, reviewContext string, tpl templat
 	return agent, client
 }
 
-func executeReviewContextSubtask(t *testing.T, agent *Agent, client *reviewContextCaptureClient, wantRequests int) {
+func executeReviewContextSubtask(t *testing.T, agent *Agent, client *reviewTestClient, wantRequests int) {
 	t.Helper()
 	err := agent.executeSubtask(context.Background(), model.Diff{
 		NewPath:    "src/app.go",
@@ -85,7 +92,7 @@ func executeReviewContextSubtask(t *testing.T, agent *Agent, client *reviewConte
 	}
 }
 
-func capturedRequestText(t *testing.T, client *reviewContextCaptureClient, index int) string {
+func capturedRequestText(t *testing.T, client *reviewTestClient, index int) string {
 	t.Helper()
 	if index >= len(client.requests) || len(client.requests[index].Messages) == 0 {
 		t.Fatalf("missing captured request %d in %#v", index, client.requests)
@@ -112,6 +119,20 @@ func TestRequirementBackgroundInjectsOnlyCurrentFileReviewContext(t *testing.T) 
 	}
 	if strings.Contains(background, "prior other context") {
 		t.Fatalf("other file context leaked:\n%s", background)
+	}
+}
+
+func TestReviewContextIsUntrustedEvidenceNotARequirement(t *testing.T) {
+	agent := New(Args{ReviewContext: map[string]string{
+		"src/app.go": "contradictory prior claim",
+	}})
+
+	background := agent.requirementBackground("src/app.go")
+
+	if !strings.Contains(background, "UNTRUSTED PRIOR REVIEW EVIDENCE") ||
+		!strings.Contains(background, "independently revalidate") ||
+		strings.Contains(background, "Prior unresolved review thread context") {
+		t.Fatalf("review context trust contract missing:\n%s", background)
 	}
 }
 
@@ -206,7 +227,7 @@ func TestGeneratedPlanMarkersRemainLiteral(t *testing.T) {
 		"",
 		mainTaskTemplate("Context: {{requirement_background}}\nPlan: {{plan_guidance}}", 10000),
 	)
-	client.responses = []string{"literal {{requirement_background}} marker", "done"}
+	client.responses = []*llm.ChatResponse{textResponse("literal {{requirement_background}} marker")}
 	setPlanTask(agent, "plan")
 
 	executeReviewContextSubtask(t, agent, client, 2)
@@ -222,6 +243,7 @@ func TestOversizedReviewContextIsOmittedBeforeTokenSkip(t *testing.T) {
 		strings.Repeat("review-context ", 1000),
 		mainTaskTemplate("File {{current_file_path}}\n{{diff}}\n{{requirement_background}}", 100),
 	)
+	agent.coverage.ReviewableCount = 1
 
 	executeReviewContextSubtask(t, agent, client, 1)
 	rendered := capturedRequestText(t, client, 0)
@@ -232,7 +254,7 @@ func TestOversizedReviewContextIsOmittedBeforeTokenSkip(t *testing.T) {
 		t.Fatalf("existing background missing after context omission:\n%s", rendered)
 	}
 	warnings := agent.Warnings()
-	if len(warnings) != 1 || warnings[0].Type != "review_context_omitted_token_budget" {
+	if len(warnings) != 1 || warnings[0].Type != "review_context_omitted_token_budget" || agent.Coverage().Status != "complete" {
 		t.Fatalf("warnings = %#v, want review context omission warning", warnings)
 	}
 }

@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/open-code-review/open-code-review/internal/agent"
+)
 
 func TestSanitizeTerminal(t *testing.T) {
 	tests := []struct {
@@ -32,4 +39,56 @@ func TestSanitizeTerminal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestJSONOutputClassifiesWarnings(t *testing.T) {
+	for _, test := range [][]string{
+		{"review_context_omitted_token_budget", "incomplete", "completed_with_errors", "Some files could not be reviewed due to errors."},
+		{"coverage_incomplete", "complete", "completed_with_errors", "Some files could not be reviewed due to errors."},
+		{"review_context_omitted_token_budget", "complete", "success", "No comments generated. Looks good to me."},
+	} {
+		payload := captureJSONOutput(t, func() error {
+			return outputJSONWithWarnings(nil, []agent.AgentWarning{{Type: test[0]}}, agent.ReviewCoverage{Status: test[1], ChangedFiles: 1, EligibleFiles: 1, ReviewedFiles: 1}, 0, 0, 0, 0, 0, time.Second)
+		})
+		coverage, ok := payload["coverage"].(map[string]any)
+		if !ok || payload["status"] != test[2] || payload["message"] != test[3] || coverage["status"] != test[1] || payload["summary"].(map[string]any)["files_reviewed"] != coverage["reviewed_files"] {
+			t.Fatalf("coverage and summary = %#v, want status %q", payload, test[2])
+		}
+	}
+}
+
+func TestJSONNoFilesPreservesRevalidationWarning(t *testing.T) {
+	payload := captureJSONOutput(t, func() error {
+		return outputJSONNoFiles(agent.ReviewCoverage{Status: "incomplete"}, []agent.AgentWarning{{File: "src/app.py", Type: "revalidation_incomplete", Message: "not in delta"}})
+	})
+	warnings, ok := payload["warnings"].([]any)
+	if !ok || payload["status"] != "completed_with_errors" || len(warnings) != 1 || warnings[0].(map[string]any)["file"] != "src/app.py" {
+		t.Fatalf("output = %#v, want incomplete result with revalidation path", payload)
+	}
+}
+
+func captureJSONOutput(t *testing.T, output func() error) map[string]any {
+	t.Helper()
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { read.Close(); write.Close() })
+	original := os.Stdout
+	os.Stdout = write
+	t.Cleanup(func() { os.Stdout = original })
+
+	if err := output(); err != nil {
+		t.Fatal(err)
+	}
+	if err := write.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = original
+
+	var payload map[string]any
+	if err := json.NewDecoder(read).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }

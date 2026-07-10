@@ -9,8 +9,6 @@
 {{diff}}
 </current_file_diff>
 
-Current time in the real world: {{current_system_date_time}}
-
 ### Requirement Background (Optional)
 {{requirement_background}}
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -23,18 +24,13 @@ func outputText(comments []model.LlmComment) {
 	}
 }
 
-func hasSubtaskErrors(warnings []agent.AgentWarning) bool {
-	for _, w := range warnings {
-		if w.Type == "subtask_error" {
-			return true
-		}
-	}
-	return false
+func hasIncompleteReview(warnings []agent.AgentWarning) bool {
+	return slices.ContainsFunc(warnings, agent.AgentWarning.IsIncomplete)
 }
 
 func outputTextWithWarnings(comments []model.LlmComment, warnings []agent.AgentWarning) {
 	if len(comments) == 0 {
-		if hasSubtaskErrors(warnings) {
+		if hasIncompleteReview(warnings) {
 			fmt.Println("Some files could not be reviewed due to errors (see warnings below).")
 		} else {
 			fmt.Println("No comments generated. Looks good to me.")
@@ -187,11 +183,12 @@ type jsonSummary struct {
 }
 
 type jsonOutput struct {
-	Status   string               `json:"status"`
-	Message  string               `json:"message,omitempty"`
-	Summary  *jsonSummary         `json:"summary,omitempty"`
-	Comments []model.LlmComment   `json:"comments"`
-	Warnings []agent.AgentWarning `json:"warnings,omitempty"`
+	Status   string                `json:"status"`
+	Message  string                `json:"message,omitempty"`
+	Summary  *jsonSummary          `json:"summary,omitempty"`
+	Comments []model.LlmComment    `json:"comments"`
+	Warnings []agent.AgentWarning  `json:"warnings,omitempty"`
+	Coverage *agent.ReviewCoverage `json:"coverage,omitempty"`
 }
 
 func outputJSON(comments []model.LlmComment) error {
@@ -207,13 +204,14 @@ func outputJSON(comments []model.LlmComment) error {
 	return enc.Encode(out)
 }
 
-func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentWarning,
-	filesReviewed, inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheWriteTokens int64, duration time.Duration) error {
+func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentWarning, coverage agent.ReviewCoverage,
+	inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheWriteTokens int64, duration time.Duration) error {
 	out := jsonOutput{
 		Status:   "success",
 		Comments: comments,
+		Coverage: &coverage,
 		Summary: &jsonSummary{
-			FilesReviewed:    filesReviewed,
+			FilesReviewed:    int64(coverage.ReviewedFiles),
 			Comments:         int64(len(comments)),
 			TotalTokens:      totalTokens,
 			InputTokens:      inputTokens,
@@ -224,7 +222,7 @@ func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentW
 		},
 	}
 	if len(comments) == 0 {
-		if hasSubtaskErrors(warnings) {
+		if hasIncompleteReview(warnings) || coverage.Status == "incomplete" {
 			out.Message = "Some files could not be reviewed due to errors."
 		} else {
 			out.Message = "No comments generated. Looks good to me."
@@ -232,22 +230,26 @@ func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentW
 	}
 	if len(warnings) > 0 {
 		out.Warnings = warnings
-		if hasSubtaskErrors(warnings) {
-			out.Status = "completed_with_errors"
-		} else {
-			out.Status = "completed_with_warnings"
-		}
+	}
+	if hasIncompleteReview(warnings) || coverage.Status == "incomplete" {
+		out.Status = "completed_with_errors"
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
 }
 
-func outputJSONNoFiles() error {
+func outputJSONNoFiles(coverage agent.ReviewCoverage, warnings []agent.AgentWarning) error {
 	out := jsonOutput{
 		Status:   "skipped",
 		Message:  "No supported files changed.",
 		Comments: []model.LlmComment{},
+		Coverage: &coverage,
+		Warnings: warnings,
+	}
+	if coverage.Status == "incomplete" || hasIncompleteReview(warnings) {
+		out.Status = "completed_with_errors"
+		out.Message = "Some files could not be reviewed due to errors."
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
