@@ -57,6 +57,12 @@ func mainTaskTemplate(content string, maxTokens int) template.Template {
 	}
 }
 
+func setPlanTask(agent *Agent, content string) {
+	agent.args.Template.PlanTask = &template.LlmConversation{
+		Messages: []template.ChatMessage{{Role: "user", Content: content}},
+	}
+}
+
 func newCapturedReviewContextAgent(background, reviewContext string, tpl template.Template) (*Agent, *reviewTestClient) {
 	client := &reviewTestClient{}
 	agent := New(Args{
@@ -193,6 +199,44 @@ func TestPlanTaskReviewContextDoesNotExpandPlanToolsPlaceholder(t *testing.T) {
 	}
 }
 
+func TestPlanTaskDiffDoesNotExpandRequirementBackgroundPlaceholder(t *testing.T) {
+	agent, client := newCapturedReviewContextAgent(
+		"background",
+		"",
+		mainTaskTemplate("main", 10000),
+	)
+	setPlanTask(agent, "Diff:\n{{diff}}\nContext:\n{{requirement_background}}")
+
+	err := agent.executeSubtask(context.Background(), model.Diff{
+		NewPath:    "src/app.go",
+		Diff:       "@@\n+literal {{requirement_background}} marker",
+		Insertions: 1,
+	})
+	if err != nil {
+		t.Fatalf("executeSubtask: %v", err)
+	}
+	rendered := capturedRequestText(t, client, 0)
+	if !strings.Contains(rendered, "literal {{requirement_background}} marker") {
+		t.Fatalf("diff placeholder was expanded:\n%s", rendered)
+	}
+}
+
+func TestGeneratedPlanMarkersRemainLiteral(t *testing.T) {
+	agent, client := newCapturedReviewContextAgent(
+		"background",
+		"",
+		mainTaskTemplate("Context: {{requirement_background}}\nPlan: {{plan_guidance}}", 10000),
+	)
+	client.responses = []*llm.ChatResponse{textResponse("literal {{requirement_background}} marker")}
+	setPlanTask(agent, "plan")
+
+	executeReviewContextSubtask(t, agent, client, 2)
+	rendered := capturedRequestText(t, client, 1)
+	if !strings.Contains(rendered, "literal {{requirement_background}} marker") {
+		t.Fatalf("generated plan marker was expanded:\n%s", rendered)
+	}
+}
+
 func TestOversizedReviewContextIsOmittedBeforeTokenSkip(t *testing.T) {
 	agent, client := newCapturedReviewContextAgent(
 		"existing background",
@@ -211,5 +255,19 @@ func TestOversizedReviewContextIsOmittedBeforeTokenSkip(t *testing.T) {
 	warnings := agent.Warnings()
 	if len(warnings) != 1 || warnings[0].Type != "review_context_omitted_token_budget" {
 		t.Fatalf("warnings = %#v, want review context omission warning", warnings)
+	}
+}
+
+func TestOverBudgetPlanDoesNotReachProvider(t *testing.T) {
+	agent, client := newCapturedReviewContextAgent(
+		"",
+		strings.Repeat("review-context ", 1000),
+		mainTaskTemplate("main", 100),
+	)
+	setPlanTask(agent, "{{requirement_background}}")
+
+	executeReviewContextSubtask(t, agent, client, 1)
+	if got := capturedRequestText(t, client, 0); got != "main" {
+		t.Fatalf("only provider request = %q, want main task", got)
 	}
 }

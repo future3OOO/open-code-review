@@ -355,6 +355,8 @@ See the [`examples/`](./examples/) directory for integration examples:
 | `--timeout` | — | `10` | Concurrent task timeout in minutes |
 | `--audience` | — | `human` | `human` (show progress) or `agent` (summary only) |
 | `--background` | `-b` | — | Optional requirement/business context for the review; auto-filled from commit message when using `--commit` |
+| `--review-context` | — | — | Path to optional per-file review context JSON |
+| `--include-markdown` | — | `false` | Include Markdown files in the review |
 | `--model` | — | — | Select or override the LLM model for this review |
 | `--rule` | — | — | Path to custom JSON review rules |
 | `--max-tools` | — | built-in | Max tool call rounds per file; only takes effect when greater than template default |

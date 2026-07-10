@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/open-code-review/open-code-review/internal/model"
 )
@@ -34,18 +35,18 @@ func loadReviewContext(path string) (reviewContextInput, error) {
 	if strings.TrimSpace(path) == "" {
 		return reviewContextInput{}, nil
 	}
-	info, err := os.Stat(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return reviewContextInput{}, fmt.Errorf("read review context: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil {
 		return reviewContextInput{}, fmt.Errorf("stat review context: %w", err)
 	}
 	if !info.Mode().IsRegular() {
 		return reviewContextInput{}, fmt.Errorf("review context must be a regular file")
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return reviewContextInput{}, fmt.Errorf("read review context: %w", err)
-	}
-	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxReviewContextBytes+1))
 	if err != nil {
 		return reviewContextInput{}, fmt.Errorf("read review context: %w", err)
