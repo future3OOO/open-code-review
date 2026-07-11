@@ -48,10 +48,11 @@ func TestJSONOutputClassifiesWarnings(t *testing.T) {
 		{"review_context_omitted_token_budget", "complete", "success", "No comments generated. Looks good to me."},
 	} {
 		payload := captureJSONOutput(t, func() error {
-			return outputJSONWithWarnings(nil, []agent.AgentWarning{{Type: test[0]}}, agent.ReviewCoverage{Status: test[1], ChangedFiles: 1, EligibleFiles: 1, ReviewedFiles: 1}, 0, 0, 0, 0, 0, time.Second)
+			return outputJSONWithWarnings(nil, []agent.AgentWarning{{Type: test[0]}}, agent.ReviewCoverage{Status: test[1], ChangedFiles: 1, EligibleFiles: 1, ReviewedFiles: 1}, 0, 0, 0, 0, 0, 0.25, time.Second)
 		})
 		coverage, ok := payload["coverage"].(map[string]any)
-		if !ok || payload["status"] != test[2] || payload["message"] != test[3] || coverage["status"] != test[1] || payload["summary"].(map[string]any)["files_reviewed"] != coverage["reviewed_files"] {
+		summary := payload["summary"].(map[string]any)
+		if !ok || payload["status"] != test[2] || payload["message"] != test[3] || coverage["status"] != test[1] || summary["files_reviewed"] != coverage["reviewed_files"] || summary["cost_usd"] != 0.25 || summary["elapsed_ms"] != float64(1000) {
 			t.Fatalf("coverage and summary = %#v, want status %q", payload, test[2])
 		}
 	}

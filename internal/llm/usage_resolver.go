@@ -7,23 +7,35 @@ import (
 
 // UsageInfo holds token usage extracted from an LLM API response.
 type UsageInfo struct {
-	TotalTokens      int64 `json:"total_tokens"`
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
-	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+	TotalTokens      int64   `json:"total_tokens"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	CacheReadTokens  int64   `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64   `json:"cache_write_tokens,omitempty"`
+	CostUSD          float64 `json:"cost_usd,omitempty"`
 }
 
 var promptTokensPaths = []string{
 	"usage.prompt_tokens",      // OpenAI standard
+	"usage.input_tokens",       // Anthropic / Claude Code
 	"prompt_tokens",            // flat at root
+	"input_tokens",             // flat Anthropic response
 	"data.usage.prompt_tokens", // wrapped in data layer
 }
 
 var completionTokensPaths = []string{
 	"usage.completion_tokens",      // OpenAI standard
+	"usage.output_tokens",          // Anthropic / Claude Code
 	"completion_tokens",            // flat at root
+	"output_tokens",                // flat Anthropic response
 	"data.usage.completion_tokens", // wrapped in data layer
+}
+
+var costUSDPaths = []string{
+	"total_cost_usd", // Claude Code result envelope
+	"cost_usd",       // flat provider response
+	"usage.cost_usd", // nested provider response
+	"data.cost_usd",  // wrapped provider response
 }
 
 var cacheReadTokensPaths = []string{
@@ -60,8 +72,9 @@ func resolveUsage(raw []byte) *UsageInfo {
 	completion, _ := probePath(rawBody, completionTokensPaths)
 	cacheRead, _ := probePath(rawBody, cacheReadTokensPaths)
 	cacheWrite, _ := probePath(rawBody, cacheWriteTokensPaths)
+	costUSD, hasCost := probeFloatPath(rawBody, costUSDPaths)
 
-	if !hasAny && prompt == 0 && completion == 0 {
+	if !hasAny && prompt == 0 && completion == 0 && !hasCost {
 		return nil
 	}
 
@@ -71,6 +84,7 @@ func resolveUsage(raw []byte) *UsageInfo {
 		CompletionTokens: completion,
 		CacheReadTokens:  cacheRead,
 		CacheWriteTokens: cacheWrite,
+		CostUSD:          costUSD,
 	}
 
 	// If TotalTokens wasn't explicitly available but we have prompt+completion, compute it.
@@ -81,24 +95,27 @@ func resolveUsage(raw []byte) *UsageInfo {
 	return ui
 }
 
+func probeFloatPath(root map[string]any, paths []string) (float64, bool) {
+	for _, path := range paths {
+		value, found := valueAtPath(root, path)
+		if !found {
+			continue
+		}
+		if value, ok := value.(float64); ok && value >= 0 {
+			return value, true
+		}
+	}
+	return 0, false
+}
+
 // probePath walks through each candidate path in order, returning the first
 // int64 value found along with true. Returns (0, false) if none match.
 func probePath(root map[string]any, paths []string) (int64, bool) {
-	for _, p := range paths {
-		parts := strings.Split(p, ".")
-
-		var current any = root
-		for _, part := range parts {
-			obj, ok := current.(map[string]any)
-			if !ok {
-				goto next
-			}
-			current, ok = obj[part]
-			if !ok {
-				goto next
-			}
+	for _, path := range paths {
+		current, ok := valueAtPath(root, path)
+		if !ok {
+			continue
 		}
-
 		switch v := current.(type) {
 		case float64:
 			return int64(v), true
@@ -107,7 +124,21 @@ func probePath(root map[string]any, paths []string) (int64, bool) {
 		case int:
 			return int64(v), true
 		}
-	next:
 	}
 	return 0, false
+}
+
+func valueAtPath(root map[string]any, path string) (any, bool) {
+	var current any = root
+	for _, part := range strings.Split(path, ".") {
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = obj[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
 }

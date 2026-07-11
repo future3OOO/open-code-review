@@ -153,6 +153,27 @@ func TestParseClaudeCodeResponseRejectsErrorEnvelopeBeforeDirectOutput(t *testin
 	}
 }
 
+func TestParseClaudeCodeResponsePreservesUsageAndCost(t *testing.T) {
+	raw := []byte(`{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0125,"usage":{"input_tokens":120,"output_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":10},"structured_output":{"content":"ok","tool_calls":[]}}`)
+
+	resp, err := parseClaudeCodeResponse(raw, "claude-opus-4-8", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Usage == nil {
+		t.Fatal("expected Claude Code usage")
+	}
+	if resp.Usage.PromptTokens != 120 || resp.Usage.CompletionTokens != 30 || resp.Usage.TotalTokens != 200 {
+		t.Fatalf("tokens = %#v, want input=120 output=30 total=200", resp.Usage)
+	}
+	if resp.Usage.CacheReadTokens != 40 || resp.Usage.CacheWriteTokens != 10 {
+		t.Fatalf("cache tokens = %#v, want read=40 write=10", resp.Usage)
+	}
+	if resp.Usage.CostUSD != 0.0125 {
+		t.Fatalf("cost = %f, want 0.0125", resp.Usage.CostUSD)
+	}
+}
+
 func TestParseClaudeCodeResponseRejectsEmptyOutput(t *testing.T) {
 	for _, raw := range []string{
 		`{"content":"","tool_calls":null}`,

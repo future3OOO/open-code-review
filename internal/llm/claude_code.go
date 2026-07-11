@@ -276,21 +276,30 @@ type claudeCodeToolCall struct {
 
 func parseClaudeCodeResponse(raw []byte, model string, allowedTools []ToolDef) (*ChatResponse, error) {
 	var envelope claudeCodeEnvelope
-	if err := json.Unmarshal(raw, &envelope); err == nil && envelope.hasEnvelopeFields() {
-		return mapClaudeCodeEnvelope(envelope, model, allowedTools)
-	}
-
-	var direct claudeCodeOutput
-	if err := json.Unmarshal(raw, &direct); err == nil {
-		if claudeCodeDirectFieldsPresent(raw) {
-			return mapClaudeCodeOutput(direct, model, allowedTools)
+	var response *ChatResponse
+	var err error
+	unmarshalErr := json.Unmarshal(raw, &envelope)
+	if unmarshalErr == nil && envelope.hasEnvelopeFields() {
+		response, err = mapClaudeCodeEnvelope(envelope, model, allowedTools)
+	} else {
+		var direct claudeCodeOutput
+		if directErr := json.Unmarshal(raw, &direct); directErr == nil && claudeCodeDirectFieldsPresent(raw) {
+			response, err = mapClaudeCodeOutput(direct, model, allowedTools)
+		} else {
+			if unmarshalErr != nil {
+				return nil, fmt.Errorf("parse claude-code output: %w", unmarshalErr)
+			}
+			response, err = mapClaudeCodeEnvelope(envelope, model, allowedTools)
 		}
 	}
-
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return nil, fmt.Errorf("parse claude-code output: %w", err)
+	if err != nil {
+		return nil, err
 	}
-	return mapClaudeCodeEnvelope(envelope, model, allowedTools)
+	if response == nil {
+		return nil, fmt.Errorf("claude-code output did not produce a response")
+	}
+	response.Usage = resolveUsage(raw)
+	return response, nil
 }
 
 func (e claudeCodeEnvelope) hasEnvelopeFields() bool {
