@@ -96,33 +96,14 @@ func resolveUsage(raw []byte) *UsageInfo {
 }
 
 func probeFloatPath(root map[string]any, paths []string) (float64, bool) {
-	for _, p := range paths {
-		var current any = root
-		for _, part := range strings.Split(p, ".") {
-			obj, ok := current.(map[string]any)
-			if !ok {
-				goto next
-			}
-			current, ok = obj[part]
-			if !ok {
-				goto next
-			}
+	for _, path := range paths {
+		value, found := valueAtPath(root, path)
+		if !found {
+			continue
 		}
-		switch value := current.(type) {
-		case float64:
-			if value >= 0 {
-				return value, true
-			}
-		case int64:
-			if value >= 0 {
-				return float64(value), true
-			}
-		case int:
-			if value >= 0 {
-				return float64(value), true
-			}
+		if value, ok := value.(float64); ok && value >= 0 {
+			return value, true
 		}
-	next:
 	}
 	return 0, false
 }
@@ -130,21 +111,11 @@ func probeFloatPath(root map[string]any, paths []string) (float64, bool) {
 // probePath walks through each candidate path in order, returning the first
 // int64 value found along with true. Returns (0, false) if none match.
 func probePath(root map[string]any, paths []string) (int64, bool) {
-	for _, p := range paths {
-		parts := strings.Split(p, ".")
-
-		var current any = root
-		for _, part := range parts {
-			obj, ok := current.(map[string]any)
-			if !ok {
-				goto next
-			}
-			current, ok = obj[part]
-			if !ok {
-				goto next
-			}
+	for _, path := range paths {
+		current, ok := valueAtPath(root, path)
+		if !ok {
+			continue
 		}
-
 		switch v := current.(type) {
 		case float64:
 			return int64(v), true
@@ -153,7 +124,21 @@ func probePath(root map[string]any, paths []string) (int64, bool) {
 		case int:
 			return int64(v), true
 		}
-	next:
 	}
 	return 0, false
+}
+
+func valueAtPath(root map[string]any, path string) (any, bool) {
+	var current any = root
+	for _, part := range strings.Split(path, ".") {
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = obj[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
 }

@@ -278,15 +278,16 @@ func parseClaudeCodeResponse(raw []byte, model string, allowedTools []ToolDef) (
 	var envelope claudeCodeEnvelope
 	var response *ChatResponse
 	var err error
-	if unmarshalErr := json.Unmarshal(raw, &envelope); unmarshalErr == nil && envelope.hasEnvelopeFields() {
+	unmarshalErr := json.Unmarshal(raw, &envelope)
+	if unmarshalErr == nil && envelope.hasEnvelopeFields() {
 		response, err = mapClaudeCodeEnvelope(envelope, model, allowedTools)
 	} else {
 		var direct claudeCodeOutput
 		if directErr := json.Unmarshal(raw, &direct); directErr == nil && claudeCodeDirectFieldsPresent(raw) {
 			response, err = mapClaudeCodeOutput(direct, model, allowedTools)
 		} else {
-			if envelopeErr := json.Unmarshal(raw, &envelope); envelopeErr != nil {
-				return nil, fmt.Errorf("parse claude-code output: %w", envelopeErr)
+			if unmarshalErr != nil {
+				return nil, fmt.Errorf("parse claude-code output: %w", unmarshalErr)
 			}
 			response, err = mapClaudeCodeEnvelope(envelope, model, allowedTools)
 		}
