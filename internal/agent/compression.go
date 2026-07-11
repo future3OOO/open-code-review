@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/open-code-review/open-code-review/internal/llm"
@@ -211,12 +210,7 @@ func (a *Agent) runCompression(ctx context.Context, msgs []llm.Message, filePath
 		return msgs, fmt.Errorf("memory compression: %w", err)
 	}
 	rec.SetResponse(resp, duration)
-	if resp.Usage != nil {
-		atomic.AddInt64(&a.totalInputTokens, resp.Usage.PromptTokens)
-		atomic.AddInt64(&a.totalOutputTokens, resp.Usage.CompletionTokens)
-		atomic.AddInt64(&a.totalCacheReadTokens, resp.Usage.CacheReadTokens)
-		atomic.AddInt64(&a.totalCacheWriteTokens, resp.Usage.CacheWriteTokens)
-	}
+	a.recordUsage(resp.Usage)
 
 	rawSummary := stripMarkdownFences(resp.Content())
 	if rawSummary == "" {

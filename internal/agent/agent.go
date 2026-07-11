@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -120,6 +121,7 @@ type Agent struct {
 	totalOutputTokens     int64 // accumulated completion tokens, accessed atomically
 	totalCacheReadTokens  int64 // accumulated cache read tokens, accessed atomically
 	totalCacheWriteTokens int64 // accumulated cache write tokens, accessed atomically
+	totalCostNanoUSD      int64 // accumulated cost in billionths of a US dollar
 	subtaskFailed         int64 // count of failed subtasks, accessed atomically
 	reviewedFiles         int64
 	warningsMu            sync.Mutex
@@ -247,8 +249,8 @@ func (a *Agent) requirementBackground(path string) string {
 	return a.args.Background + "\n\n" + evidence
 }
 
-// TotalTokensUsed returns PromptTokens + CompletionTokens across all LLM calls.
-// For Anthropic, PromptTokens already includes cache read/write tokens.
+// TotalTokensUsed returns prompt plus completion tokens across all LLM calls.
+// Cache read and write tokens are reported separately.
 func (a *Agent) TotalTokensUsed() int64 {
 	return atomic.LoadInt64(&a.totalInputTokens) + atomic.LoadInt64(&a.totalOutputTokens)
 }
@@ -271,6 +273,22 @@ func (a *Agent) TotalCacheReadTokens() int64 {
 // TotalCacheWriteTokens returns the accumulated cache write tokens from all LLM calls.
 func (a *Agent) TotalCacheWriteTokens() int64 {
 	return atomic.LoadInt64(&a.totalCacheWriteTokens)
+}
+
+// TotalCostUSD returns the accumulated provider-reported LLM cost.
+func (a *Agent) TotalCostUSD() float64 {
+	return float64(atomic.LoadInt64(&a.totalCostNanoUSD)) / 1_000_000_000
+}
+
+func (a *Agent) recordUsage(usage *llm.UsageInfo) {
+	if usage == nil {
+		return
+	}
+	atomic.AddInt64(&a.totalInputTokens, usage.PromptTokens)
+	atomic.AddInt64(&a.totalOutputTokens, usage.CompletionTokens)
+	atomic.AddInt64(&a.totalCacheReadTokens, usage.CacheReadTokens)
+	atomic.AddInt64(&a.totalCacheWriteTokens, usage.CacheWriteTokens)
+	atomic.AddInt64(&a.totalCostNanoUSD, int64(math.Round(usage.CostUSD*1_000_000_000)))
 }
 
 // Warnings returns a copy of non-fatal warnings recorded during review.
@@ -599,12 +617,7 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 		return
 	}
 	rec.SetResponse(resp, time.Since(startTime))
-	if resp.Usage != nil {
-		atomic.AddInt64(&a.totalInputTokens, resp.Usage.PromptTokens)
-		atomic.AddInt64(&a.totalOutputTokens, resp.Usage.CompletionTokens)
-		atomic.AddInt64(&a.totalCacheReadTokens, resp.Usage.CacheReadTokens)
-		atomic.AddInt64(&a.totalCacheWriteTokens, resp.Usage.CacheWriteTokens)
-	}
+	a.recordUsage(resp.Usage)
 
 	verified, err := parseFilterResponse(resp.Content(), len(comments))
 	if err != nil {
@@ -836,12 +849,7 @@ func (a *Agent) executePlanPhase(ctx context.Context, newPath, rawDiff, changeFi
 		return "", fmt.Errorf("plan request: %w", err)
 	}
 	rec.SetResponse(resp, time.Since(startTime))
-	if resp.Usage != nil {
-		atomic.AddInt64(&a.totalInputTokens, resp.Usage.PromptTokens)
-		atomic.AddInt64(&a.totalOutputTokens, resp.Usage.CompletionTokens)
-		atomic.AddInt64(&a.totalCacheReadTokens, resp.Usage.CacheReadTokens)
-		atomic.AddInt64(&a.totalCacheWriteTokens, resp.Usage.CacheWriteTokens)
-	}
+	a.recordUsage(resp.Usage)
 	fmt.Fprintf(stdout.Writer(), "[ocr] Plan completed for %s\n", newPath)
 	return resp.Content(), nil
 }
@@ -923,11 +931,8 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		totalTokens := int64(0)
 		if resp.Usage != nil {
 			totalTokens = resp.Usage.TotalTokens
-			atomic.AddInt64(&a.totalInputTokens, resp.Usage.PromptTokens)
-			atomic.AddInt64(&a.totalOutputTokens, resp.Usage.CompletionTokens)
-			atomic.AddInt64(&a.totalCacheReadTokens, resp.Usage.CacheReadTokens)
-			atomic.AddInt64(&a.totalCacheWriteTokens, resp.Usage.CacheWriteTokens)
 		}
+		a.recordUsage(resp.Usage)
 		telemetry.RecordLLMRequest(ctx, a.args.Model, duration, totalTokens, "ok")
 
 		content := resp.Content()
@@ -1073,12 +1078,7 @@ func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.To
 							rlRec := fs.AppendTaskRecord(session.ReLocationTask, msgs)
 							if resp != nil {
 								rlRec.SetResponse(resp, time.Since(rlStart))
-								if resp.Usage != nil {
-									atomic.AddInt64(&a.totalInputTokens, resp.Usage.PromptTokens)
-									atomic.AddInt64(&a.totalOutputTokens, resp.Usage.CompletionTokens)
-									atomic.AddInt64(&a.totalCacheReadTokens, resp.Usage.CacheReadTokens)
-									atomic.AddInt64(&a.totalCacheWriteTokens, resp.Usage.CacheWriteTokens)
-								}
+								a.recordUsage(resp.Usage)
 							} else {
 								rlRec.SetError(fmt.Errorf("re-location LLM call failed"), time.Since(rlStart))
 							}

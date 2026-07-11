@@ -172,14 +172,16 @@ func buildDiffLines(comment model.LlmComment) []suggestdiff.DiffLine {
 }
 
 type jsonSummary struct {
-	FilesReviewed    int64  `json:"files_reviewed"`
-	Comments         int64  `json:"comments"`
-	TotalTokens      int64  `json:"total_tokens"`
-	InputTokens      int64  `json:"input_tokens"`
-	OutputTokens     int64  `json:"output_tokens"`
-	CacheReadTokens  int64  `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
-	Elapsed          string `json:"elapsed"`
+	FilesReviewed    int64   `json:"files_reviewed"`
+	Comments         int64   `json:"comments"`
+	TotalTokens      int64   `json:"total_tokens"`
+	InputTokens      int64   `json:"input_tokens"`
+	OutputTokens     int64   `json:"output_tokens"`
+	CacheReadTokens  int64   `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64   `json:"cache_write_tokens,omitempty"`
+	CostUSD          float64 `json:"cost_usd"`
+	ElapsedMS        int64   `json:"elapsed_ms"`
+	Elapsed          string  `json:"elapsed"`
 }
 
 type jsonOutput struct {
@@ -205,7 +207,7 @@ func outputJSON(comments []model.LlmComment) error {
 }
 
 func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentWarning, coverage agent.ReviewCoverage,
-	inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheWriteTokens int64, duration time.Duration) error {
+	inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheWriteTokens int64, costUSD float64, duration time.Duration) error {
 	out := jsonOutput{
 		Status:   "success",
 		Comments: comments,
@@ -218,6 +220,8 @@ func outputJSONWithWarnings(comments []model.LlmComment, warnings []agent.AgentW
 			OutputTokens:     outputTokens,
 			CacheReadTokens:  cacheReadTokens,
 			CacheWriteTokens: cacheWriteTokens,
+			CostUSD:          costUSD,
+			ElapsedMS:        duration.Milliseconds(),
 			Elapsed:          duration.Round(time.Second).String(),
 		},
 	}

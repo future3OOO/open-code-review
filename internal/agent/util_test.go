@@ -2,6 +2,7 @@ package agent
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/open-code-review/open-code-review/internal/llm"
@@ -56,6 +57,35 @@ func TestStripEmptyPlanBlock(t *testing.T) {
 				t.Errorf("stripEmptyPlanBlock() left literal {{plan_guidance}} in output: %q", got)
 			}
 		})
+	}
+}
+
+func TestRecordUsageAggregatesTokensAndCost(t *testing.T) {
+	agent := &Agent{}
+	usage := &llm.UsageInfo{
+		PromptTokens: 10, CompletionTokens: 5,
+		CacheReadTokens: 3, CacheWriteTokens: 2, CostUSD: 0.0125,
+	}
+
+	const workers = 100
+	var group sync.WaitGroup
+	group.Add(workers)
+	for range workers {
+		go func() {
+			defer group.Done()
+			agent.recordUsage(usage)
+		}()
+	}
+	group.Wait()
+
+	if agent.TotalInputTokens() != 1000 || agent.TotalOutputTokens() != 500 {
+		t.Fatalf("tokens = %d/%d, want 1000/500", agent.TotalInputTokens(), agent.TotalOutputTokens())
+	}
+	if agent.TotalCacheReadTokens() != 300 || agent.TotalCacheWriteTokens() != 200 {
+		t.Fatalf("cache tokens = %d/%d, want 300/200", agent.TotalCacheReadTokens(), agent.TotalCacheWriteTokens())
+	}
+	if agent.TotalCostUSD() != 1.25 {
+		t.Fatalf("cost = %f, want 1.25", agent.TotalCostUSD())
 	}
 }
 

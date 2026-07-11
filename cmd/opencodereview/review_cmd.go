@@ -185,7 +185,7 @@ func runReview(args []string) error {
 	}
 
 	if opts.outputFormat == "json" {
-		return outputJSONWithWarnings(comments, ag.Warnings(), ag.Coverage(), ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(), ag.TotalCacheReadTokens(), ag.TotalCacheWriteTokens(), duration)
+		return outputJSONWithWarnings(comments, ag.Warnings(), ag.Coverage(), ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(), ag.TotalCacheReadTokens(), ag.TotalCacheWriteTokens(), ag.TotalCostUSD(), duration)
 	}
 	if opts.audience == "agent" {
 		outputTextWithWarnings(comments, ag.Warnings())
