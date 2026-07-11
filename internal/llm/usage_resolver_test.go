@@ -23,6 +23,7 @@ func TestResolveUsageCostPaths(t *testing.T) {
 		{"flat", `{"prompt_tokens":1,"cost_usd":0.02}`, 0.02},
 		{"usage", `{"prompt_tokens":1,"usage":{"cost_usd":0.03}}`, 0.03},
 		{"wrapped", `{"prompt_tokens":1,"data":{"cost_usd":0.04}}`, 0.04},
+		{"cost only", `{"total_cost_usd":0.05}`, 0.05},
 		{"negative rejected", `{"prompt_tokens":1,"cost_usd":-1}`, 0},
 	}
 	for _, test := range tests {

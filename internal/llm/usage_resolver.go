@@ -72,9 +72,9 @@ func resolveUsage(raw []byte) *UsageInfo {
 	completion, _ := probePath(rawBody, completionTokensPaths)
 	cacheRead, _ := probePath(rawBody, cacheReadTokensPaths)
 	cacheWrite, _ := probePath(rawBody, cacheWriteTokensPaths)
-	costUSD, _ := probeFloatPath(rawBody, costUSDPaths)
+	costUSD, hasCost := probeFloatPath(rawBody, costUSDPaths)
 
-	if !hasAny && prompt == 0 && completion == 0 {
+	if !hasAny && prompt == 0 && completion == 0 && !hasCost {
 		return nil
 	}
 
