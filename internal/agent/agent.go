@@ -54,6 +54,9 @@ type Args struct {
 	// IncludeMarkdown lets an explicit caller widen the default extension filter.
 	IncludeMarkdown bool
 
+	// ReviewAllSupportedFiles bypasses built-in path exclusions for supported files.
+	ReviewAllSupportedFiles bool
+
 	// LLM client for model inference.
 	LLMClient llm.LLMClient
 
@@ -793,7 +796,14 @@ func (a *Agent) filterDiffs(diffs []model.Diff) []model.Diff {
 			} else {
 				fmt.Fprintf(stdout.Writer(), "[ocr] Skipping %s — filtered by path/extension rules\n", path)
 			}
-			a.recordWarning("coverage_incomplete", path, "changed file excluded: "+string(reason))
+			if reason != ExcludeDeleted {
+				for _, finding := range a.args.Revalidate {
+					if finding.Path == d.OldPath || finding.Path == d.NewPath {
+						a.recordWarning("revalidation_incomplete", path, "open finding changed on a file excluded from review")
+						break
+					}
+				}
+			}
 			skipped++
 			continue
 		}

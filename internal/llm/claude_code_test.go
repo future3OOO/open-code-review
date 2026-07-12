@@ -212,6 +212,18 @@ func TestRunClaudeCodeCommandRedactsFailureStderr(t *testing.T) {
 	}
 }
 
+func TestRunClaudeCodeCommandPreservesStructuredFailureStdout(t *testing.T) {
+	_, err := runClaudeCodeCommand(
+		context.Background(),
+		[]string{"sh", "-c", `printf '%s' '{"type":"result","is_error":true,"api_error_status":401,"result":"authentication refresh failed"}'; exit 1`},
+		"",
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "authentication refresh failed") {
+		t.Fatalf("structured Claude Code failure was lost: %v", err)
+	}
+}
+
 func TestSensitiveClaudeCodeEnvLocksCurrentForwardedClassifications(t *testing.T) {
 	wantSensitive := map[string]bool{
 		"HTTP_PROXY":              true,

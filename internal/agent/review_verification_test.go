@@ -245,7 +245,7 @@ func TestReviewDoesNotSeedRevalidationFindingWhenMainFails(t *testing.T) {
 	}
 }
 
-func TestChangedFilteredPathIsNotRevalidatedAsUnchanged(t *testing.T) {
+func TestChangedFilteredPathWithOpenFindingIsIncomplete(t *testing.T) {
 	repoDir := replayRepository(t)
 	writeReplayFile(t, repoDir, "workflow.drawio", "<node/>\n")
 	client := &reviewTestClient{responses: []*llm.ChatResponse{
@@ -260,13 +260,30 @@ func TestChangedFilteredPathIsNotRevalidatedAsUnchanged(t *testing.T) {
 	}}
 
 	findings := mustRunAgent(t, agent)
-	if len(findings) != 0 || agent.Coverage().Status != "incomplete" {
-		t.Fatalf("findings = %#v; coverage = %#v", findings, agent.Coverage())
+	warnings := agent.Warnings()
+	if len(findings) != 0 || len(warnings) != 1 || warnings[0].Type != "revalidation_incomplete" ||
+		agent.Coverage().Status != "incomplete" {
+		t.Fatalf("findings = %#v; warnings = %#v; coverage = %#v", findings, warnings, agent.Coverage())
 	}
 	for _, request := range client.requests {
 		if strings.Contains(request.Messages[0].ExtractText(), "unchanged in the rerun delta") {
 			t.Fatalf("changed filtered path was given unchanged verification scope")
 		}
+	}
+}
+
+func TestDeletedChangedFileResolvesOpenFindingWithoutFailingCoverage(t *testing.T) {
+	repoDir := replayRepository(t)
+	runTestGit(t, repoDir, "rm", "-f", "app.go")
+	agent := newReplayAgent(repoDir, &reviewTestClient{})
+	agent.args.Revalidate = []model.LlmComment{authRevalidationFinding("var allow = false")}
+
+	findings := mustRunAgent(t, agent)
+	coverage := agent.Coverage()
+	if len(findings) != 0 || len(agent.Warnings()) != 0 || coverage.Status != "complete" ||
+		coverage.ChangedFiles != 1 || coverage.EligibleFiles != 0 || coverage.ReviewedFiles != 0 ||
+		coverage.ExcludedFiles != 1 || len(coverage.Files) != 1 || coverage.Files[0].ExcludeReason != ExcludeDeleted {
+		t.Fatalf("findings = %#v; warnings = %#v; coverage = %#v", findings, agent.Warnings(), coverage)
 	}
 }
 
@@ -311,7 +328,7 @@ func TestReviewRequiresExplicitSuccessfulCompletion(t *testing.T) {
 	}
 }
 
-func TestUnsupportedChangedFileMakesCoverageIncomplete(t *testing.T) {
+func TestUnsupportedChangedFileIsInventoriedWithoutFailingCoverage(t *testing.T) {
 	repoDir := replayRepository(t)
 	writeReplayFile(t, repoDir, "workflow.drawio", "diagram")
 	_, agent := runReplay(t, repoDir, &reviewTestClient{
@@ -319,8 +336,9 @@ func TestUnsupportedChangedFileMakesCoverageIncomplete(t *testing.T) {
 	})
 	warnings := agent.Warnings()
 	coverage := agent.Coverage()
-	if len(warnings) != 1 || warnings[0].File != "workflow.drawio" ||
-		coverage.Status != "incomplete" || coverage.ChangedFiles != 2 || coverage.ExcludedFiles != 1 {
+	if len(warnings) != 0 || coverage.Status != "complete" || coverage.ChangedFiles != 2 ||
+		coverage.EligibleFiles != 1 || coverage.ReviewedFiles != 1 || coverage.ExcludedFiles != 1 ||
+		len(coverage.Files) != 2 {
 		t.Fatalf("warnings = %#v; coverage = %#v", warnings, coverage)
 	}
 }
