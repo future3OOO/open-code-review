@@ -95,24 +95,25 @@ func expandShortFlags(args []string, shortMap map[string]string) []string {
 // --- review subcommand options ---
 
 type reviewOptions struct {
-	toolConfigPath    string
-	rulePath          string
-	repoDir           string
-	from              string
-	to                string
-	commit            string
-	outputFormat      string
-	audience          string // --audience: "human" (default) or "agent"
-	background        string // --background: optional requirement context
-	reviewContextPath string
-	includeMarkdown   bool
-	model             string // --model: override resolved LLM model for this review
-	concurrency       int
-	perFileTimeout    int
-	maxTools          int
-	maxGitProcs       int
-	preview           bool
-	showHelp          bool
+	toolConfigPath          string
+	rulePath                string
+	repoDir                 string
+	from                    string
+	to                      string
+	commit                  string
+	outputFormat            string
+	audience                string // --audience: "human" (default) or "agent"
+	background              string // --background: optional requirement context
+	reviewContextPath       string
+	includeMarkdown         bool
+	reviewAllSupportedFiles bool
+	model                   string // --model: override resolved LLM model for this review
+	concurrency             int
+	perFileTimeout          int
+	maxTools                int
+	maxGitProcs             int
+	preview                 bool
+	showHelp                bool
 }
 
 func parseReviewFlags(args []string) (reviewOptions, error) {
@@ -133,6 +134,7 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	a.StringVarP(&opts.background, "background", "b", "", "optional requirement/business context for the review")
 	a.StringVar(&opts.reviewContextPath, "review-context", "", "path to optional per-file review context JSON")
 	a.BoolVar(&opts.includeMarkdown, "include-markdown", false, "include Markdown files in this review")
+	a.BoolVar(&opts.reviewAllSupportedFiles, "review-all-supported-files", false, "review all supported files, including paths excluded by default")
 	a.StringVar(&opts.model, "model", "", "override LLM model for this review (e.g., claude-opus-4-6)")
 	a.IntVar(&opts.maxTools, "max-tools", 0, "max tool call rounds per file (0 = template default; min 10)")
 	a.IntVar(&opts.maxGitProcs, "max-git-procs", 16, "max concurrent git subprocesses")
@@ -227,6 +229,8 @@ Flags:
   --max-tools int         max tool call rounds per file (0 = template default; min 10)
   --model string          override LLM model for this review (e.g., claude-opus-4-6)
   --include-markdown      include Markdown files in this review
+  --review-all-supported-files
+                           review all supported files, including paths excluded by default
   -p, --preview           preview which files will be reviewed without running the LLM
   --repo string           root directory of the git repository (default: current dir)
   --review-context string path to optional per-file review context JSON

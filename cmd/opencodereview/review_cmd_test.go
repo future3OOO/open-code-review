@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -92,6 +93,60 @@ func TestRunReviewPreviewAllowsAbsentAndValidReviewContext(t *testing.T) {
 		if err := runReview(args); err != nil {
 			t.Fatalf("runReview(%v): %v", args, err)
 		}
+	}
+}
+
+func TestReviewAllSupportedFilesFlagControlsDefaultPathExclusions(t *testing.T) {
+	repoDir := initReviewTestRepo(t)
+	files := map[string]string{
+		"main.go":                   "package main\n",
+		"main_test.go":              "package main\n",
+		"oh_modules/dependency.ets": "export const value = 1\n",
+		"notes.md":                  "not enabled\n",
+	}
+	for path, content := range files {
+		fullPath := filepath.Join(repoDir, path)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	defaultOutput := runReviewCommand(t, repoDir)
+	if !strings.Contains(defaultOutput, "Will review (1)") || strings.Count(defaultOutput, "default_path") != 2 {
+		t.Fatalf("default preview did not preserve exclusions:\n%s", defaultOutput)
+	}
+
+	allSupportedOutput := runReviewCommand(t, repoDir, "--review-all-supported-files")
+	if !strings.Contains(allSupportedOutput, "Will review (3)") || strings.Contains(allSupportedOutput, "default_path") {
+		t.Fatalf("full supported-file preview did not include default paths:\n%s", allSupportedOutput)
+	}
+	if !strings.Contains(allSupportedOutput, "notes.md") || !strings.Contains(allSupportedOutput, "unsupported_ext") {
+		t.Fatalf("full supported-file preview changed extension filtering:\n%s", allSupportedOutput)
+	}
+	withMarkdownOutput := runReviewCommand(
+		t,
+		repoDir,
+		"--review-all-supported-files",
+		"--include-markdown",
+	)
+	if !strings.Contains(withMarkdownOutput, "Will review (4)") ||
+		strings.Contains(withMarkdownOutput, "unsupported_ext") ||
+		strings.Contains(withMarkdownOutput, "default_path") {
+		t.Fatalf("full supported-file preview did not preserve Markdown opt-in:\n%s", withMarkdownOutput)
+	}
+
+	rulePath := filepath.Join(t.TempDir(), "rule.json")
+	if err := os.WriteFile(rulePath, []byte(`{"rules":[],"exclude":["main_test.go"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	userExcludedOutput := runReviewCommand(t, repoDir, "--review-all-supported-files", "--rule", rulePath)
+	if !strings.Contains(userExcludedOutput, "Will review (2)") ||
+		!strings.Contains(userExcludedOutput, "main_test.go") ||
+		!strings.Contains(userExcludedOutput, "user_exclude") {
+		t.Fatalf("full supported-file preview did not preserve user exclusions:\n%s", userExcludedOutput)
 	}
 }
 
@@ -241,6 +296,23 @@ func initReviewTestRepo(t *testing.T) string {
 		runGitForTest(t, repoDir, args...)
 	}
 	return repoDir
+}
+
+func runReviewCommand(t *testing.T, repoDir string, extraArgs ...string) string {
+	t.Helper()
+	moduleDir, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"run", "./cmd/opencodereview", "review", "--repo", repoDir, "--preview"}
+	args = append(args, extraArgs...)
+	command := exec.Command("go", args...)
+	command.Dir = moduleDir
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ocr review %v: %v\n%s", extraArgs, err, output)
+	}
+	return string(output)
 }
 
 func runGitForTest(t *testing.T, repoDir string, args ...string) {

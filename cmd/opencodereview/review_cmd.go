@@ -67,9 +67,20 @@ func runReview(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load rules: %w", err)
 	}
+	gitRunner := gitcmd.New(opts.maxGitProcs)
+	agentArgs := agent.Args{
+		RepoDir:                 repoDir,
+		From:                    opts.from,
+		To:                      opts.to,
+		Commit:                  opts.commit,
+		FileFilter:              fileFilter,
+		IncludeMarkdown:         opts.includeMarkdown,
+		ReviewAllSupportedFiles: opts.reviewAllSupportedFiles,
+		GitRunner:               gitRunner,
+	}
 
 	if opts.preview {
-		return runPreview(repoDir, opts, fileFilter)
+		return runPreview(agentArgs)
 	}
 
 	toolEntries, err := toolsconfig.Load(opts.toolConfigPath)
@@ -102,8 +113,6 @@ func runReview(args []string) error {
 	llmClient := llm.NewLLMClient(ep)
 	model := ep.Model
 
-	gitRunner := gitcmd.New(opts.maxGitProcs)
-
 	collector := tool.NewCommentCollector()
 	mode := tool.ParseReviewMode(opts.from, opts.to, opts.commit)
 	ref, _ := mode.RefValue(opts.to, opts.commit)
@@ -115,28 +124,20 @@ func runReview(args []string) error {
 	}
 	tools := buildToolRegistry(collector, fileReader)
 
-	ag := agent.New(agent.Args{
-		RepoDir:               repoDir,
-		From:                  opts.from,
-		To:                    opts.to,
-		Commit:                opts.commit,
-		Template:              *tpl,
-		SystemRule:            resolver,
-		FileFilter:            fileFilter,
-		LLMClient:             llmClient,
-		Tools:                 tools,
-		PlanToolDefs:          planToolDefs,
-		MainToolDefs:          mainToolDefs,
-		CommentCollector:      collector,
-		MaxConcurrency:        opts.concurrency,
-		ConcurrentTaskTimeout: opts.perFileTimeout,
-		Model:                 model,
-		Background:            opts.background,
-		ReviewContext:         reviewContext.Paths,
-		Revalidate:            reviewContext.Revalidate,
-		IncludeMarkdown:       opts.includeMarkdown,
-		GitRunner:             gitRunner,
-	})
+	agentArgs.Template = *tpl
+	agentArgs.SystemRule = resolver
+	agentArgs.LLMClient = llmClient
+	agentArgs.Tools = tools
+	agentArgs.PlanToolDefs = planToolDefs
+	agentArgs.MainToolDefs = mainToolDefs
+	agentArgs.CommentCollector = collector
+	agentArgs.MaxConcurrency = opts.concurrency
+	agentArgs.ConcurrentTaskTimeout = opts.perFileTimeout
+	agentArgs.Model = model
+	agentArgs.Background = opts.background
+	agentArgs.ReviewContext = reviewContext.Paths
+	agentArgs.Revalidate = reviewContext.Revalidate
+	ag := agent.New(agentArgs)
 
 	// Silence progress output during execution; restore before Summary in agent mode.
 	var unsilence func()
@@ -255,18 +256,8 @@ func validateReviewRefs(repoDir string, opts reviewOptions) error {
 	return nil
 }
 
-func runPreview(repoDir string, opts reviewOptions, fileFilter *rules.FileFilter) error {
-	gitRunner := gitcmd.New(opts.maxGitProcs)
-	ag := agent.New(agent.Args{
-		RepoDir:         repoDir,
-		From:            opts.from,
-		To:              opts.to,
-		Commit:          opts.commit,
-		FileFilter:      fileFilter,
-		IncludeMarkdown: opts.includeMarkdown,
-		GitRunner:       gitRunner,
-	})
-
+func runPreview(args agent.Args) error {
+	ag := agent.New(args)
 	preview, err := ag.Preview(context.Background())
 	if err != nil {
 		return fmt.Errorf("preview failed: %w", err)

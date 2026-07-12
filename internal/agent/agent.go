@@ -54,6 +54,9 @@ type Args struct {
 	// IncludeMarkdown lets an explicit caller widen the default extension filter.
 	IncludeMarkdown bool
 
+	// ReviewAllSupportedFiles bypasses built-in path exclusions for supported files.
+	ReviewAllSupportedFiles bool
+
 	// LLM client for model inference.
 	LLMClient llm.LLMClient
 

@@ -194,18 +194,9 @@ func (c *ClaudeCodeClient) CompletionsWithCtx(ctx context.Context, req ChatReque
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	env := claudeCodeEnvironment()
-	out, err := runClaudeCodeCommand(ctx, command, prompt, env)
+	out, err := runClaudeCodeCommand(ctx, command, prompt, claudeCodeEnvironment())
 	if err != nil {
-		var exitError *exec.ExitError
-		if !errors.As(err, &exitError) || ctx.Err() != nil {
-			return nil, err
-		}
-		fmt.Fprintf(os.Stderr, "[ocr] Claude Code command failed; retrying once: %v\n", err)
-		out, err = runClaudeCodeCommand(ctx, command, prompt, env)
-		if err != nil {
-			return nil, fmt.Errorf("claude-code failed after retry: %w", err)
-		}
+		return nil, err
 	}
 	return parseClaudeCodeResponse(out, model, req.Tools)
 }

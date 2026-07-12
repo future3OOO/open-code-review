@@ -98,7 +98,7 @@ func (a *Agent) whyExcluded(d model.Diff) ExcludeReason {
 		return ExcludeExtension
 	}
 
-	if allowedext.IsExcludedPath(path) {
+	if !a.args.ReviewAllSupportedFiles && allowedext.IsExcludedPath(path) {
 		return ExcludeDefaultPath
 	}
 
