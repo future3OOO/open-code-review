@@ -71,6 +71,16 @@ var runClaudeCodeCommand = func(ctx context.Context, command []string, prompt st
 	}
 	if err != nil {
 		msg := redactClaudeCodeStderr(stderr.String(), env)
+		if detail := claudeCodeFailureDetail(stdout.Bytes()); detail != "" {
+			if msg != "" {
+				msg += "; "
+			}
+			detail = redactClaudeCodeStderr(detail, env)
+			if len(detail) > maxClaudeCodeStderrBytes {
+				detail = detail[:maxClaudeCodeStderrBytes] + "... [truncated]"
+			}
+			msg += detail
+		}
 		if msg == "" {
 			return nil, fmt.Errorf("%w: claude-code command failed", err)
 		}
@@ -184,9 +194,18 @@ func (c *ClaudeCodeClient) CompletionsWithCtx(ctx context.Context, req ChatReque
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	out, err := runClaudeCodeCommand(ctx, command, prompt, claudeCodeEnvironment())
+	env := claudeCodeEnvironment()
+	out, err := runClaudeCodeCommand(ctx, command, prompt, env)
 	if err != nil {
-		return nil, err
+		var exitError *exec.ExitError
+		if !errors.As(err, &exitError) || ctx.Err() != nil {
+			return nil, err
+		}
+		fmt.Fprintf(os.Stderr, "[ocr] Claude Code command failed; retrying once: %v\n", err)
+		out, err = runClaudeCodeCommand(ctx, command, prompt, env)
+		if err != nil {
+			return nil, fmt.Errorf("claude-code failed after retry: %w", err)
+		}
 	}
 	return parseClaudeCodeResponse(out, model, req.Tools)
 }
@@ -224,6 +243,18 @@ func redactClaudeCodeStderr(stderr string, env []string) string {
 	return redacted
 }
 
+func claudeCodeFailureDetail(raw []byte) string {
+	var envelope claudeCodeEnvelope
+	if json.Unmarshal(raw, &envelope) != nil || !envelope.IsError {
+		return ""
+	}
+	detail := strings.TrimSpace(envelope.Result)
+	if envelope.APIErrorStatus > 0 {
+		return fmt.Sprintf("API error %d: %s", envelope.APIErrorStatus, detail)
+	}
+	return detail
+}
+
 func sensitiveClaudeCodeEnv(name string) bool {
 	upper := strings.ToUpper(name)
 	return strings.Contains(upper, "TOKEN") ||
@@ -259,6 +290,7 @@ type claudeCodeEnvelope struct {
 	StructuredOutput *claudeCodeOutput `json:"structured_output"`
 	Result           string            `json:"result"`
 	IsError          bool              `json:"is_error"`
+	APIErrorStatus   int               `json:"api_error_status"`
 	Subtype          string            `json:"subtype"`
 	PermissionDenial []json.RawMessage `json:"permission_denials"`
 }

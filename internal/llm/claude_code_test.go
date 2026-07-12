@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -146,6 +147,44 @@ func TestClaudeCodeClientAppliesDefaultDeadline(t *testing.T) {
 	}
 }
 
+func TestClaudeCodeClientRetriesProcessExitOnce(t *testing.T) {
+	dir := t.TempDir()
+	commandPath := filepath.Join(dir, "claude")
+	script := `#!/bin/sh
+counter="$0.attempts"
+attempt=0
+if [ -f "$counter" ]; then
+	IFS= read -r attempt < "$counter"
+fi
+attempt=$((attempt + 1))
+printf '%s' "$attempt" > "$counter"
+if [ "$attempt" -eq 1 ]; then
+	printf '%s' '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"temporary provider failure"}'
+	exit 1
+fi
+printf '%s' '{"type":"result","subtype":"success","is_error":false,"permission_denials":[],"structured_output":{"content":"ok","tool_calls":[]}}'
+`
+	if err := os.WriteFile(commandPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+
+	resp, err := runClaudeCodeCompletion(t, simpleClaudeCodeReviewRequest())
+	if err != nil {
+		t.Fatalf("CompletionsWithCtx: %v", err)
+	}
+	if resp.Content() != "ok" {
+		t.Fatalf("Content = %q, want ok", resp.Content())
+	}
+	attempts, err := os.ReadFile(commandPath + ".attempts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(attempts) != "2" {
+		t.Fatalf("Claude Code attempts = %s, want 2", attempts)
+	}
+}
+
 func TestParseClaudeCodeResponseRejectsErrorEnvelopeBeforeDirectOutput(t *testing.T) {
 	_, err := parseClaudeCodeResponse([]byte(`{"type":"result","subtype":"error_during_execution","is_error":true,"content":"looks successful","tool_calls":[]}`), "claude-opus-4-8", nil)
 	if err == nil || !strings.Contains(err.Error(), "error envelope") {
@@ -209,6 +248,18 @@ func TestRunClaudeCodeCommandRedactsFailureStderr(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret-token") || !strings.Contains(err.Error(), "[redacted]") {
 		t.Fatalf("unexpected command error: %v", err)
+	}
+}
+
+func TestRunClaudeCodeCommandPreservesStructuredFailureStdout(t *testing.T) {
+	_, err := runClaudeCodeCommand(
+		context.Background(),
+		[]string{"sh", "-c", `printf '%s' '{"type":"result","is_error":true,"api_error_status":401,"result":"authentication refresh failed"}'; exit 1`},
+		"",
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "authentication refresh failed") {
+		t.Fatalf("structured Claude Code failure was lost: %v", err)
 	}
 }
 
