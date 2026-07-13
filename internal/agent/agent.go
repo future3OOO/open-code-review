@@ -593,11 +593,6 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 		).Replace(m.Content)
 		messages = append(messages, llm.NewTextMessage(m.Role, content))
 	}
-	if limit := a.args.Template.MaxTokens * 4 / 5; limit > 0 && countMessagesTokens(messages) > limit {
-		a.discardUnverifiedComments(newPath, comments, "review verifier context exceeds the token limit")
-		return
-	}
-
 	if ft.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(ft.Timeout)*time.Second)
@@ -605,27 +600,44 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 	}
 
 	fs := a.session.GetOrCreateFileSession(newPath)
-	rec := fs.AppendTaskRecord(session.ReviewFilterTask, messages)
-	startTime := time.Now()
+	var verified map[int]struct{}
+	for attempt := 0; attempt < 2; attempt++ {
+		if limit := a.args.Template.MaxTokens * 4 / 5; limit > 0 && countMessagesTokens(messages) > limit {
+			a.discardUnverifiedComments(newPath, comments, "review verifier context exceeds the token limit")
+			return
+		}
+		rec := fs.AppendTaskRecord(session.ReviewFilterTask, messages)
+		startTime := time.Now()
+		resp, err := a.args.LLMClient.CompletionsWithCtx(ctx, llm.ChatRequest{
+			Model:     a.args.Model,
+			Messages:  messages,
+			MaxTokens: a.args.Template.MaxTokens,
+		})
+		if err != nil {
+			rec.SetError(err, time.Since(startTime))
+			fmt.Fprintf(stdout.Writer(), "[ocr] Review filter failed for %s: %v\n", newPath, err)
+			a.discardUnverifiedComments(newPath, comments, "review verifier failed")
+			return
+		}
+		rec.SetResponse(resp, time.Since(startTime))
+		a.recordUsage(resp.Usage)
 
-	resp, err := a.args.LLMClient.CompletionsWithCtx(ctx, llm.ChatRequest{
-		Model:     a.args.Model,
-		Messages:  messages,
-		MaxTokens: a.args.Template.MaxTokens,
-	})
-	if err != nil {
-		rec.SetError(err, time.Since(startTime))
-		fmt.Fprintf(stdout.Writer(), "[ocr] Review filter failed for %s: %v\n", newPath, err)
-		a.discardUnverifiedComments(newPath, comments, "review verifier failed")
-		return
-	}
-	rec.SetResponse(resp, time.Since(startTime))
-	a.recordUsage(resp.Usage)
-
-	verified, err := parseFilterResponse(resp.Content(), len(comments))
-	if err != nil {
-		a.discardUnverifiedComments(newPath, comments, "review verifier returned malformed output")
-		return
+		verified, err = parseFilterResponse(resp.Content(), len(comments))
+		if err == nil {
+			break
+		}
+		if attempt == 1 {
+			a.discardUnverifiedComments(newPath, comments, "review verifier returned malformed output after corrective retry")
+			return
+		}
+		fmt.Fprintf(stdout.Writer(), "[ocr] Review filter returned malformed output for %s; retrying once\n", newPath)
+		messages = append(messages,
+			llm.NewTextMessage("assistant", resp.Content()),
+			llm.NewTextMessage("user", fmt.Sprintf(
+				"Your previous response did not match the required output contract. Return only a JSON array containing zero or more IDs from c-0 through c-%d, with no prose or markdown. Return [] when none are verified.",
+				len(comments)-1,
+			)),
+		)
 	}
 	remove := make(map[int]struct{}, len(comments))
 	for index, comment := range comments {

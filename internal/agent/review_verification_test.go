@@ -130,22 +130,64 @@ var template = "{{comments}}"`) {
 	}
 }
 
+func TestReviewVerifierRecoversFromOneMalformedResponse(t *testing.T) {
+	responses := reviewResponses([]map[string]any{authCandidate()}, "not-json")
+	responses = append(responses, textResponse(`["c-0"]`))
+	client := &reviewTestClient{responses: responses}
+
+	findings, agent := runReplay(t, replayRepository(t), client)
+
+	if len(findings) != 1 || findings[0].Content != "authorization bypass" {
+		t.Fatalf("findings = %#v, want verified finding after corrective retry", findings)
+	}
+	if warnings := agent.Warnings(); len(warnings) != 0 {
+		t.Fatalf("warnings = %#v, want complete verification", warnings)
+	}
+	if len(client.requests) != 4 {
+		t.Fatalf("requests = %d, want main review, completion, and two verifier attempts", len(client.requests))
+	}
+	retryPrompt := client.requests[3].Messages
+	if len(retryPrompt) < 3 || !strings.Contains(retryPrompt[len(retryPrompt)-2].ExtractText(), "not-json") ||
+		!strings.Contains(retryPrompt[len(retryPrompt)-1].ExtractText(), "JSON array") {
+		t.Fatalf("corrective verifier prompt = %#v", retryPrompt)
+	}
+}
+
+func TestReviewVerifierCorrectiveAttemptRechecksTokenLimit(t *testing.T) {
+	client := &reviewTestClient{responses: reviewResponses(
+		[]map[string]any{authCandidate()}, strings.Repeat("invalid ", 9_000),
+	)}
+
+	findings, agent := runReplay(t, replayRepository(t), client)
+	warnings := agent.Warnings()
+	if len(findings) != 0 || len(warnings) != 1 || warnings[0].Type != "verification_incomplete" {
+		t.Fatalf("findings = %#v; warnings = %#v", findings, warnings)
+	}
+	if len(client.requests) != 3 {
+		t.Fatalf("requests = %d, want corrective attempt stopped before provider call", len(client.requests))
+	}
+}
+
 func TestReviewVerifierFailuresAreIncompleteAndFailClosed(t *testing.T) {
 	cases := []struct {
 		name    string
 		verdict string
 		error   error
 		missing bool
+		retry   bool
 	}{
-		{name: "malformed", verdict: "not-json"},
-		{name: "malformed id", verdict: `["c-0junk"]`},
-		{name: "null", verdict: `null`},
+		{name: "malformed", verdict: "not-json", retry: true},
+		{name: "malformed id", verdict: `["c-0junk"]`, retry: true},
+		{name: "null", verdict: `null`, retry: true},
 		{name: "error", error: errors.New("verifier unavailable")},
 		{name: "missing", missing: true},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			responses := reviewResponses([]map[string]any{authCandidate()}, test.verdict)
+			if test.retry {
+				responses = append(responses, textResponse(test.verdict))
+			}
 			client := &reviewTestClient{responses: responses, errors: map[int]error{2: test.error}}
 			agent := newReplayAgent(replayRepository(t), client)
 			if test.missing {
@@ -156,6 +198,15 @@ func TestReviewVerifierFailuresAreIncompleteAndFailClosed(t *testing.T) {
 			warnings := agent.Warnings()
 			if len(findings) != 0 || len(warnings) != 1 || warnings[0].Type != "verification_incomplete" {
 				t.Fatalf("findings = %#v; warnings = %#v", findings, warnings)
+			}
+			expectedRequests := 3
+			if test.retry {
+				expectedRequests = 4
+			} else if test.missing {
+				expectedRequests = 2
+			}
+			if len(client.requests) != expectedRequests {
+				t.Fatalf("requests = %d, want %d", len(client.requests), expectedRequests)
 			}
 		})
 	}
