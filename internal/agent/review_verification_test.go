@@ -35,6 +35,14 @@ func textResponse(content string) *llm.ChatResponse {
 	return &llm.ChatResponse{Choices: []llm.Choice{{Message: llm.ResponseMessage{Content: &content}}}}
 }
 
+func requestText(req llm.ChatRequest) string {
+	var text strings.Builder
+	for _, message := range req.Messages {
+		text.WriteString(message.ExtractText())
+	}
+	return text.String()
+}
+
 func candidate(content, severity, failureMode, contract string) map[string]any {
 	return map[string]any{
 		"content": content, "severity": severity, "failure_mode": failureMode,
@@ -168,13 +176,10 @@ type referencedSourceReviewClient struct {
 
 func (c *referencedSourceReviewClient) CompletionsWithCtx(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	c.requests = append(c.requests, req)
-	var prompt strings.Builder
-	for _, message := range req.Messages {
-		prompt.WriteString(message.ExtractText())
-	}
-	text := prompt.String()
+	text := requestText(req)
 	if strings.Contains(text, "SCOPE=") {
-		if strings.Contains(text, "decisiveHash") {
+		if strings.Contains(text, "decisiveHash") ||
+			(strings.Contains(text, `"review_path":"evidence.go"`) && strings.Contains(text, `"tool_name":"current_file"`)) {
 			return textResponse(`[]`), nil
 		}
 		return textResponse(`["c-0"]`), nil
@@ -203,26 +208,30 @@ func (c *referencedSourceReviewClient) CompletionsWithCtx(_ context.Context, req
 }
 
 func TestReviewVerifierReceivesCurrentReferencedSource(t *testing.T) {
-	repoDir := replayRepository(t)
-	writeReplayFile(t, repoDir, "evidence.go", "package app\n\nfunc decisiveHash() string { return \"hash16\" }\n")
-	client := &referencedSourceReviewClient{}
-	agent := newReplayAgent(repoDir, client)
-
-	findings := mustRunAgent(t, agent)
-
-	if len(findings) != 0 {
-		t.Fatalf("finding contradicted by referenced current source escaped: %#v", findings)
+	tests := []struct {
+		name, content, evidence string
+	}{
+		{name: "non-empty", content: "package app\n\nfunc decisiveHash() string { return \"hash16\" }\n", evidence: "decisiveHash"},
+		{name: "empty", evidence: `"tool_name":"current_file"`},
 	}
-	var verifierPrompt strings.Builder
-	for _, request := range client.requests {
-		if len(request.Messages) > 0 && strings.Contains(request.Messages[0].ExtractText(), "SCOPE=") {
-			for _, message := range request.Messages {
-				verifierPrompt.WriteString(message.ExtractText())
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repoDir := replayRepository(t)
+			writeReplayFile(t, repoDir, "evidence.go", test.content)
+			client := &referencedSourceReviewClient{}
+
+			findings := mustRunAgent(t, newReplayAgent(repoDir, client))
+			var verifierPrompt strings.Builder
+			for _, request := range client.requests {
+				text := requestText(request)
+				if strings.Contains(text, "SCOPE=") {
+					verifierPrompt.WriteString(text)
+				}
 			}
-		}
-	}
-	if !strings.Contains(verifierPrompt.String(), "decisiveHash") {
-		t.Fatalf("verifier did not receive referenced current source: %s", verifierPrompt.String())
+			if prompt := verifierPrompt.String(); len(findings) != 0 || !strings.Contains(prompt, test.evidence) {
+				t.Fatalf("findings = %#v; verifier prompt = %s", findings, prompt)
+			}
+		})
 	}
 }
 

@@ -113,7 +113,7 @@ func (a *Agent) reviewFilterEvidence(path string) (string, error) {
 			continue
 		}
 		referenced := a.findDiff(referencedPath)
-		if referenced == nil || referenced.NewFileContent == "" {
+		if referenced == nil || referenced.IsDeleted || referenced.IsBinary {
 			continue
 		}
 		arguments, err := json.Marshal(struct {
