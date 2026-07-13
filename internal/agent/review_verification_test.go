@@ -141,11 +141,11 @@ var template = "{{comments}}"`) {
 
 func TestReviewVerifierReceivesSiblingDiffEvidenceGatheredByMainReview(t *testing.T) {
 	repoDir := replayRepository(t)
-	writeReplayFile(t, repoDir, "contract.txt", "offset > 0 requires page_of\n")
+	writeReplayFile(t, repoDir, "evidence.go", "package app\n\n// offset > 0 requires page_of\n")
 	client := &reviewTestClient{responses: []*llm.ChatResponse{
 		toolResponse("file_read_diff", struct {
 			PathArray []string `json:"path_array"`
-		}{PathArray: []string{"contract.txt"}}),
+		}{PathArray: []string{"evidence.go", "missing.go"}}),
 		toolResponse("code_comment", struct {
 			Comments []any `json:"comments"`
 		}{Comments: []any{authCandidate()}}),
@@ -164,7 +164,8 @@ func TestReviewVerifierReceivesSiblingDiffEvidenceGatheredByMainReview(t *testin
 	for _, message := range client.requests[3].Messages {
 		verifierPrompt.WriteString(message.ExtractText())
 	}
-	if len(findings) != 1 || !strings.Contains(verifierPrompt.String(), "requires page_of") {
+	if prompt := verifierPrompt.String(); len(findings) != 1 || !strings.Contains(prompt, "requires page_of") ||
+		strings.Contains(prompt, `"tool_name":"file_read_diff"`) {
 		t.Fatalf("findings = %#v; verifier prompt = %s", findings, verifierPrompt.String())
 	}
 }

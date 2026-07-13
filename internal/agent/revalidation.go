@@ -102,11 +102,10 @@ func (a *Agent) reviewFilterEvidence(path string) (string, error) {
 				PathArray []string `json:"path_array"`
 			}
 			if json.Unmarshal([]byte(result.Arguments), &args) == nil && len(args.PathArray) > 0 {
-				includeRawResult = false
 				for _, referencedPath := range args.PathArray {
 					referencedPaths[referencedPath] = struct{}{}
-					if !hasCurrentSource(referencedPath) {
-						includeRawResult = true
+					if hasCurrentSource(referencedPath) {
+						includeRawResult = false
 					}
 				}
 			}
