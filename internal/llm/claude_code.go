@@ -219,7 +219,7 @@ func renderCodeAgentPrompt(agentName, protocolSchema string, req ChatRequest) (s
 		TrustedTools      []ToolDef `json:"trusted_tools"`
 	}{req.Messages, req.Tools}, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("marshal claude-code prompt: %w", err)
+		return "", fmt.Errorf("marshal %s prompt: %w", agentName, err)
 	}
 
 	return strings.Join([]string{
