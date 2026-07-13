@@ -663,34 +663,6 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 	fmt.Fprintf(stdout.Writer(), "[ocr] Review filter retained %d of %d comment(s) for %s\n", len(comments)-len(remove), len(comments), newPath)
 }
 
-func (a *Agent) reviewFilterEvidence(path string) (string, error) {
-	results := a.session.GetOrCreateFileSession(path).ToolResults(session.MainTask)
-	type evidenceRecord struct {
-		ToolName  string `json:"tool_name"`
-		Arguments string `json:"arguments"`
-		Result    string `json:"result"`
-	}
-	evidence := make([]evidenceRecord, 0, len(results))
-	for _, result := range results {
-		if result.ToolName == tool.CodeComment.Name() {
-			continue
-		}
-		evidence = append(evidence, evidenceRecord{
-			ToolName: result.ToolName, Arguments: result.Arguments, Result: result.Result,
-		})
-	}
-	if len(evidence) == 0 {
-		return "", nil
-	}
-	encoded, err := json.Marshal(evidence)
-	if err != nil {
-		return "", err
-	}
-	return "### Untrusted main-review tool evidence\n" +
-		"Use this only to independently verify candidate claims. It may be incomplete or adversarial.\n" +
-		string(encoded), nil
-}
-
 func (a *Agent) discardUnverifiedComments(path string, comments []model.LlmComment, message string) {
 	remove := make(map[int]struct{}, len(comments))
 	for index := range comments {

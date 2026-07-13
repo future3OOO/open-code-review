@@ -35,6 +35,14 @@ func textResponse(content string) *llm.ChatResponse {
 	return &llm.ChatResponse{Choices: []llm.Choice{{Message: llm.ResponseMessage{Content: &content}}}}
 }
 
+func requestText(req llm.ChatRequest) string {
+	var text strings.Builder
+	for _, message := range req.Messages {
+		text.WriteString(message.ExtractText())
+	}
+	return text.String()
+}
+
 func candidate(content, severity, failureMode, contract string) map[string]any {
 	return map[string]any{
 		"content": content, "severity": severity, "failure_mode": failureMode,
@@ -158,6 +166,72 @@ func TestReviewVerifierReceivesSiblingDiffEvidenceGatheredByMainReview(t *testin
 	}
 	if len(findings) != 1 || !strings.Contains(verifierPrompt.String(), "requires page_of") {
 		t.Fatalf("findings = %#v; verifier prompt = %s", findings, verifierPrompt.String())
+	}
+}
+
+type referencedSourceReviewClient struct {
+	appCalls int
+	requests []llm.ChatRequest
+}
+
+func (c *referencedSourceReviewClient) CompletionsWithCtx(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	c.requests = append(c.requests, req)
+	text := requestText(req)
+	if strings.Contains(text, "SCOPE=") {
+		if strings.Contains(text, "decisiveHash") ||
+			(strings.Contains(text, `"review_path":"evidence.go"`) && strings.Contains(text, `"tool_name":"current_file"`)) {
+			return textResponse(`[]`), nil
+		}
+		return textResponse(`["c-0"]`), nil
+	}
+	if strings.Contains(text, "decisiveHash") {
+		return toolResponse("task_done", map[string]any{"state": "DONE"}), nil
+	}
+	c.appCalls++
+	if c.appCalls == 1 {
+		claim := candidate(
+			"hash binding accepts the full digest",
+			"high",
+			"the caller passes a full digest where a 16-character binding is required",
+			"hash bindings must be exactly 16 characters",
+		)
+		return toolCallsResponse(
+			toolCall("file_read", struct {
+				FilePath string `json:"file_path"`
+				Start    int    `json:"start_line"`
+				End      int    `json:"end_line"`
+			}{FilePath: "evidence.go", Start: 1, End: 1}),
+			toolCall("code_comment", map[string]any{"comments": []map[string]any{claim}}),
+		), nil
+	}
+	return toolResponse("task_done", map[string]any{"state": "DONE"}), nil
+}
+
+func TestReviewVerifierReceivesCurrentReferencedSource(t *testing.T) {
+	tests := []struct {
+		name, content, evidence string
+	}{
+		{name: "non-empty", content: "package app\n\nfunc decisiveHash() string { return \"hash16\" }\n", evidence: "decisiveHash"},
+		{name: "empty", evidence: `"tool_name":"current_file"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repoDir := replayRepository(t)
+			writeReplayFile(t, repoDir, "evidence.go", test.content)
+			client := &referencedSourceReviewClient{}
+
+			findings := mustRunAgent(t, newReplayAgent(repoDir, client))
+			var verifierPrompt strings.Builder
+			for _, request := range client.requests {
+				text := requestText(request)
+				if strings.Contains(text, "SCOPE=") {
+					verifierPrompt.WriteString(text)
+				}
+			}
+			if prompt := verifierPrompt.String(); len(findings) != 0 || !strings.Contains(prompt, test.evidence) {
+				t.Fatalf("findings = %#v; verifier prompt = %s", findings, prompt)
+			}
+		})
 	}
 }
 
