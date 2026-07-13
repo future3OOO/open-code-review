@@ -77,7 +77,7 @@ func ResolveEndpointWithModelOverride(configPath, modelOverride string) (Resolve
 }
 
 func endpointComplete(ep ResolvedEndpoint) bool {
-	if ep.Protocol == protocolClaudeCode {
+	if isCodeAgentProtocol(ep.Protocol) {
 		return ep.Model != ""
 	}
 	return ep.URL != "" && ep.Token != "" && ep.Model != ""
@@ -221,7 +221,7 @@ func tryProviderConfig(cfg configFile, modelOverride string) (ResolvedEndpoint, 
 		url = entry.URL
 		protocol = strings.ToLower(entry.Protocol)
 	}
-	if apiKey == "" && protocol != protocolClaudeCode {
+	if apiKey == "" && !isCodeAgentProtocol(protocol) {
 		return ResolvedEndpoint{}, false, fmt.Errorf("provider %q has no api_key configured and no environment variable fallback found", cfg.Provider)
 	}
 
@@ -293,6 +293,10 @@ func tryProviderConfig(cfg configFile, modelOverride string) (ResolvedEndpoint, 
 		Source:     "provider:" + cfg.Provider,
 		ExtraBody:  extraBody,
 	}, true, nil
+}
+
+func isCodeAgentProtocol(protocol string) bool {
+	return protocol == protocolClaudeCode || protocol == protocolCodexCode
 }
 
 // tryLegacyLlmConfig resolves an endpoint from the legacy llm config block.

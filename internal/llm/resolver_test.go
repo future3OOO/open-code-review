@@ -282,6 +282,16 @@ func writeClaudeCodeProviderConfig(t *testing.T, entry providerEntryConfig) stri
 	})
 }
 
+func writeCodexCodeProviderConfig(t *testing.T, entry providerEntryConfig) string {
+	t.Helper()
+	return writeConfigFile(t, configFile{
+		Provider: "codex-code",
+		Providers: map[string]providerEntryConfig{
+			"codex-code": entry,
+		},
+	})
+}
+
 func TestResolveEndpoint_ProviderAnthropic(t *testing.T) {
 	clearAllEnv(t)
 
@@ -879,6 +889,28 @@ func TestResolveEndpoint_ClaudeCodeProviderDoesNotRequireAPIKeyOrURL(t *testing.
 	}
 	if ep.Model != "claude-opus-4-8" {
 		t.Errorf("Model = %q, want %q", ep.Model, "claude-opus-4-8")
+	}
+}
+
+func TestResolveEndpoint_CodexCodeProviderDoesNotRequireAPIKeyOrURL(t *testing.T) {
+	clearAllEnv(t)
+
+	cfgPath := writeCodexCodeProviderConfig(t, providerEntryConfig{
+		Model: "gpt-5.4",
+	})
+
+	ep, err := ResolveEndpoint(cfgPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ep.Protocol != "codex-code" {
+		t.Errorf("Protocol = %q, want %q", ep.Protocol, "codex-code")
+	}
+	if ep.URL != "" || ep.Token != "" {
+		t.Errorf("Codex CLI endpoint must not require HTTP credentials: %#v", ep)
+	}
+	if ep.Model != "gpt-5.4" {
+		t.Errorf("Model = %q, want %q", ep.Model, "gpt-5.4")
 	}
 }
 

@@ -1,5 +1,5 @@
 // Package llm provides LLM client interfaces supporting multiple protocols.
-// Supported protocols: Anthropic Messages API, OpenAI Chat Completions API.
+// Supported protocols include Anthropic and OpenAI APIs plus native code-agent CLIs.
 package llm
 
 import (
@@ -190,7 +190,8 @@ type ClientConfig struct {
 // --- Factory ---
 
 // NewLLMClient creates the appropriate client based on the resolved endpoint protocol.
-// protocol: "anthropic" -> AnthropicClient, anything else -> OpenAIClient.
+// Native CLI protocols are selected explicitly; unknown protocols retain the
+// existing OpenAI-compatible fallback.
 func NewLLMClient(ep ResolvedEndpoint) LLMClient {
 	cfg := ClientConfig{
 		URL:        ep.URL,
@@ -201,6 +202,9 @@ func NewLLMClient(ep ResolvedEndpoint) LLMClient {
 	}
 	if ep.Protocol == protocolClaudeCode {
 		return NewClaudeCodeClient(cfg)
+	}
+	if ep.Protocol == protocolCodexCode {
+		return NewCodexCodeClient(cfg)
 	}
 	if ep.Protocol == "anthropic" {
 		return NewAnthropicClient(cfg)

@@ -40,7 +40,7 @@ func TestListProviders_Order(t *testing.T) {
 	if len(providers) < 3 {
 		t.Fatalf("expected at least 3 providers, got %d", len(providers))
 	}
-	expected := []string{"anthropic", "claude-code", "dashscope", "dashscope-tokenplan", "deepseek", "hy-tokenplan", "kimi", "mimo", "minimax", "openai", "tencent-tokenhub", "volcengine", "z-ai"}
+	expected := []string{"anthropic", "claude-code", "codex-code", "dashscope", "dashscope-tokenplan", "deepseek", "hy-tokenplan", "kimi", "mimo", "minimax", "openai", "tencent-tokenhub", "volcengine", "z-ai"}
 	if len(providers) != len(expected) {
 		t.Fatalf("expected %d providers, got %d", len(expected), len(providers))
 	}
@@ -146,5 +146,21 @@ func TestLookupProvider_ClaudeCodeDetails(t *testing.T) {
 	}
 	if len(p.Models) == 0 || p.Models[0] != "claude-opus-4-8" {
 		t.Errorf("Models = %v, want claude-opus-4-8 first", p.Models)
+	}
+}
+
+func TestLookupProvider_CodexCodeDetails(t *testing.T) {
+	p, ok := LookupProvider("codex-code")
+	if !ok {
+		t.Fatal("codex-code not found")
+	}
+	if p.Protocol != "codex-code" {
+		t.Errorf("Protocol = %q, want %q", p.Protocol, "codex-code")
+	}
+	if p.BaseURL != "" || p.AuthHeader != "" || p.EnvVar != "" {
+		t.Errorf("Codex CLI provider must not require HTTP configuration: %#v", p)
+	}
+	if len(p.Models) == 0 || p.Models[0] != "gpt-5.4" {
+		t.Errorf("Models = %v, want gpt-5.4 first", p.Models)
 	}
 }
