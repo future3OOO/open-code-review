@@ -62,6 +62,7 @@ var registry = []Provider{
 		DisplayName: "Codex CLI",
 		Protocol:    protocolCodexCode,
 		Models: []string{
+			"gpt-5.6-sol",
 			"gpt-5.4",
 		},
 	},
