@@ -156,8 +156,12 @@ func (a *Agent) reviewFilterEvidence(path string, tokenBudget int) (string, erro
 			string(encoded), nil
 	}
 	encoded, err := encode(evidence)
-	if err != nil || tokenBudget <= 0 || llm.CountTokens(encoded) <= tokenBudget {
+	if err != nil || tokenBudget <= 0 {
 		return encoded, err
+	}
+	encodedTokens := llm.CountTokens(encoded)
+	if encodedTokens <= tokenBudget {
+		return encoded, nil
 	}
 	for index := range evidence {
 		if evidence[index].ToolName != "current_file" {
@@ -167,11 +171,22 @@ func (a *Agent) reviewFilterEvidence(path string, tokenBudget int) (string, erro
 		if referenced == nil || referenced.Diff == "" {
 			continue
 		}
+		current := evidence[index]
 		evidence[index].ToolName = "current_diff"
 		evidence[index].Result = referenced.Diff
-		encoded, err = encode(evidence)
-		if err != nil || llm.CountTokens(encoded) <= tokenBudget {
-			return encoded, err
+		candidate, err := encode(evidence)
+		if err != nil {
+			return "", err
+		}
+		candidateTokens := llm.CountTokens(candidate)
+		if candidateTokens >= encodedTokens {
+			evidence[index] = current
+			continue
+		}
+		encoded = candidate
+		encodedTokens = candidateTokens
+		if encodedTokens <= tokenBudget {
+			return encoded, nil
 		}
 	}
 	return encoded, nil

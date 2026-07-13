@@ -596,8 +596,9 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 	evidenceBudget := 0
 	if limit := a.args.Template.MaxTokens * 4 / 5; limit > 0 {
 		evidenceBudget = limit - countMessagesTokens(messages)
-		if evidenceBudget < 1 {
-			evidenceBudget = 1
+		if evidenceBudget <= 0 {
+			a.discardUnverifiedComments(newPath, comments, "review verifier context exceeds the token limit")
+			return
 		}
 	}
 	evidence, err := a.reviewFilterEvidence(newPath, evidenceBudget)
