@@ -673,7 +673,7 @@ func (a *Agent) discardUnverifiedComments(path string, comments []model.LlmComme
 }
 
 func publishableSeverity(severity string) bool {
-	return severity == "critical" || severity == "high" || severity == "medium"
+	return severity == "critical" || severity == "medium"
 }
 
 // buildFilterCommentsJSON serializes comments into a JSON array with generated IDs.
