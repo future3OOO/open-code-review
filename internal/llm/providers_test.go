@@ -160,7 +160,7 @@ func TestLookupProvider_CodexCodeDetails(t *testing.T) {
 	if p.BaseURL != "" || p.AuthHeader != "" || p.EnvVar != "" {
 		t.Errorf("Codex CLI provider must not require HTTP configuration: %#v", p)
 	}
-	if len(p.Models) == 0 || p.Models[0] != "gpt-5.4" {
-		t.Errorf("Models = %v, want gpt-5.4 first", p.Models)
+	if len(p.Models) == 0 || p.Models[0] != "gpt-5.6-sol" {
+		t.Errorf("Models = %v, want gpt-5.6-sol first", p.Models)
 	}
 }

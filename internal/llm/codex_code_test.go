@@ -15,7 +15,7 @@ func TestCodexCodeClientReturnsToolCallsFromStructuredOutput(t *testing.T) {
 	runCodexCodeCommand = func(_ context.Context, command []string, prompt string, _ []string) ([]byte, error) {
 		for _, required := range []string{
 			"exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
-			"--model", "gpt-5.4", "features.shell_tool=false",
+			"--model", "gpt-5.6-sol", `model_reasoning_effort="medium"`, "features.shell_tool=false",
 			"features.unified_exec=false", "features.multi_agent=false",
 			"features.apps=false", "features.plugins=false", `web_search="disabled"`,
 			"mcp_servers={}", "--color", "never", "--output-schema", "-",
@@ -32,11 +32,15 @@ func TestCodexCodeClientReturnsToolCallsFromStructuredOutput(t *testing.T) {
 		if !json.Valid(schema) || !strings.Contains(prompt, "trusted_tools") {
 			t.Fatalf("schema = %s; prompt = %s", schema, prompt)
 		}
-		return []byte(`{"content":"","tool_calls":[{"id":"call-1","name":"code_comment","arguments":{"comments":[]}}]}`), nil
+		if !strings.Contains(string(schema), `"arguments":{"type":"string"}`) ||
+			!strings.Contains(prompt, `"arguments":{"type":"string"}`) {
+			t.Fatalf("Codex arguments contract is not a JSON string: schema = %s; prompt = %s", schema, prompt)
+		}
+		return []byte(`{"content":"","tool_calls":[{"id":"call-1","name":"code_comment","arguments":"{\"comments\":[]}"}]}`), nil
 	}
 	t.Cleanup(func() { runCodexCodeCommand = oldRunner })
 
-	client := NewLLMClient(ResolvedEndpoint{Protocol: "codex-code", Model: "gpt-5.4"})
+	client := NewLLMClient(ResolvedEndpoint{Protocol: "codex-code", Model: "gpt-5.6-sol"})
 	response, err := client.CompletionsWithCtx(context.Background(), ChatRequest{
 		Messages: []Message{NewTextMessage("user", "review")},
 		Tools: []ToolDef{{

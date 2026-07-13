@@ -9,6 +9,7 @@ import (
 )
 
 const defaultCodexCodeTimeout = 5 * time.Minute
+const codexCodeProtocolSchema = `{"type":"object","properties":{"content":{"type":"string"},"tool_calls":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"arguments":{"type":"string"}},"required":["id","name","arguments"],"additionalProperties":false}}},"required":["content","tool_calls"],"additionalProperties":false}`
 
 var codexCodeEnvNames = []string{
 	"HOME",
@@ -57,7 +58,7 @@ func (c *CodexCodeClient) CompletionsWithCtx(ctx context.Context, req ChatReques
 	}
 	schemaPath := schema.Name()
 	defer os.Remove(schemaPath)
-	if _, err := schema.WriteString(claudeCodeProtocolSchema); err != nil {
+	if _, err := schema.WriteString(codexCodeProtocolSchema); err != nil {
 		schema.Close()
 		return nil, fmt.Errorf("write codex output schema: %w", err)
 	}
@@ -68,6 +69,7 @@ func (c *CodexCodeClient) CompletionsWithCtx(ctx context.Context, req ChatReques
 	command := []string{
 		"codex", "exec", "--ephemeral", "--sandbox", "read-only",
 		"--skip-git-repo-check", "--model", model,
+		"-c", `model_reasoning_effort="medium"`,
 		"-c", "features.shell_tool=false",
 		"-c", "features.unified_exec=false",
 		"-c", "features.multi_agent=false",
@@ -77,7 +79,7 @@ func (c *CodexCodeClient) CompletionsWithCtx(ctx context.Context, req ChatReques
 		"-c", `web_search="disabled"`,
 		"--color", "never", "--output-schema", schemaPath, "-",
 	}
-	prompt, err := renderCodeAgentPrompt("Codex", req)
+	prompt, err := renderCodeAgentPrompt("Codex", codexCodeProtocolSchema, req)
 	if err != nil {
 		return nil, err
 	}
