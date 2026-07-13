@@ -14,6 +14,7 @@ import (
 	"github.com/open-code-review/open-code-review/internal/config/template"
 	"github.com/open-code-review/open-code-review/internal/llm"
 	"github.com/open-code-review/open-code-review/internal/model"
+	"github.com/open-code-review/open-code-review/internal/session"
 	"github.com/open-code-review/open-code-review/internal/tool"
 )
 
@@ -127,6 +128,55 @@ func TestReviewVerifierPreservesTemplateTokensInSource(t *testing.T) {
 
 var template = "{{comments}}"`) {
 		t.Fatalf("verifier rewrote a literal source placeholder: %s", request)
+	}
+}
+
+func TestReviewVerifierReceivesSiblingDiffEvidenceGatheredByMainReview(t *testing.T) {
+	repoDir := replayRepository(t)
+	writeReplayFile(t, repoDir, "contract.txt", "offset > 0 requires page_of\n")
+	client := &reviewTestClient{responses: []*llm.ChatResponse{
+		toolResponse("file_read_diff", struct {
+			PathArray []string `json:"path_array"`
+		}{PathArray: []string{"contract.txt"}}),
+		toolResponse("code_comment", struct {
+			Comments []any `json:"comments"`
+		}{Comments: []any{authCandidate()}}),
+		toolResponse("task_done", struct {
+			State string `json:"state"`
+		}{State: "DONE"}),
+		textResponse(`["c-0"]`),
+	}}
+	agent := newReplayAgent(repoDir, client)
+	agent.args.Tools.Register(tool.NewFileReadDiff(tool.DiffMap{}))
+	agent.args.Template.MaxToolRequestTimes = 3
+
+	findings := mustRunAgent(t, agent)
+
+	var verifierPrompt strings.Builder
+	for _, message := range client.requests[3].Messages {
+		verifierPrompt.WriteString(message.ExtractText())
+	}
+	if len(findings) != 1 || !strings.Contains(verifierPrompt.String(), "requires page_of") {
+		t.Fatalf("findings = %#v; verifier prompt = %s", findings, verifierPrompt.String())
+	}
+}
+
+func TestReviewVerifierMarksOversizedMainEvidenceIncomplete(t *testing.T) {
+	agent := newReplayAgent(replayRepository(t), &reviewTestClient{})
+	agent.args.Template.MaxTokens = 500
+	agent.args.CommentCollector.Add(authRevalidationFinding("allow := true"))
+	record := agent.Session().GetOrCreateFileSession("app.go").AppendTaskRecord(session.MainTask, nil)
+	record.AddToolResult("file_read_diff", "{}", strings.Repeat("sibling evidence ", 2_000))
+
+	agent.executeReviewFilter(context.Background(), model.Diff{
+		NewPath: "app.go", Diff: "@@\n+allow := true", NewFileContent: "allow := true",
+	}, "app.go", 1)
+
+	warnings := agent.Warnings()
+	if len(agent.args.CommentCollector.Comments()) != 0 || len(warnings) != 1 ||
+		warnings[0].Type != "verification_incomplete" ||
+		!strings.Contains(warnings[0].Message, "main review evidence exceeds") {
+		t.Fatalf("comments = %#v; warnings = %#v", agent.args.CommentCollector.Comments(), warnings)
 	}
 }
 
