@@ -161,6 +161,71 @@ func TestReviewVerifierReceivesSiblingDiffEvidenceGatheredByMainReview(t *testin
 	}
 }
 
+type referencedSourceReviewClient struct {
+	appCalls int
+	requests []llm.ChatRequest
+}
+
+func (c *referencedSourceReviewClient) CompletionsWithCtx(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	c.requests = append(c.requests, req)
+	var prompt strings.Builder
+	for _, message := range req.Messages {
+		prompt.WriteString(message.ExtractText())
+	}
+	text := prompt.String()
+	if strings.Contains(text, "SCOPE=") {
+		if strings.Contains(text, "decisiveHash") {
+			return textResponse(`[]`), nil
+		}
+		return textResponse(`["c-0"]`), nil
+	}
+	if strings.Contains(text, "decisiveHash") {
+		return toolResponse("task_done", map[string]any{"state": "DONE"}), nil
+	}
+	c.appCalls++
+	if c.appCalls == 1 {
+		claim := candidate(
+			"hash binding accepts the full digest",
+			"high",
+			"the caller passes a full digest where a 16-character binding is required",
+			"hash bindings must be exactly 16 characters",
+		)
+		return toolCallsResponse(
+			toolCall("file_read", struct {
+				FilePath string `json:"file_path"`
+				Start    int    `json:"start_line"`
+				End      int    `json:"end_line"`
+			}{FilePath: "evidence.go", Start: 1, End: 1}),
+			toolCall("code_comment", map[string]any{"comments": []map[string]any{claim}}),
+		), nil
+	}
+	return toolResponse("task_done", map[string]any{"state": "DONE"}), nil
+}
+
+func TestReviewVerifierReceivesCurrentReferencedSource(t *testing.T) {
+	repoDir := replayRepository(t)
+	writeReplayFile(t, repoDir, "evidence.go", "package app\n\nfunc decisiveHash() string { return \"hash16\" }\n")
+	client := &referencedSourceReviewClient{}
+	agent := newReplayAgent(repoDir, client)
+
+	findings := mustRunAgent(t, agent)
+
+	if len(findings) != 0 {
+		t.Fatalf("finding contradicted by referenced current source escaped: %#v", findings)
+	}
+	var verifierPrompt strings.Builder
+	for _, request := range client.requests {
+		if len(request.Messages) > 0 && strings.Contains(request.Messages[0].ExtractText(), "SCOPE=") {
+			for _, message := range request.Messages {
+				verifierPrompt.WriteString(message.ExtractText())
+			}
+		}
+	}
+	if !strings.Contains(verifierPrompt.String(), "decisiveHash") {
+		t.Fatalf("verifier did not receive referenced current source: %s", verifierPrompt.String())
+	}
+}
+
 func TestReviewVerifierMarksOversizedMainEvidenceIncomplete(t *testing.T) {
 	agent := newReplayAgent(replayRepository(t), &reviewTestClient{})
 	agent.args.Template.MaxTokens = 500
