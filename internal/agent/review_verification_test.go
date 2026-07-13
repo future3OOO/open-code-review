@@ -260,6 +260,34 @@ func TestReviewVerifierMarksOversizedMainEvidenceIncomplete(t *testing.T) {
 	}
 }
 
+func TestReviewVerifierFallsBackToCurrentDiffWithinEvidenceBudget(t *testing.T) {
+	client := &reviewTestClient{responses: []*llm.ChatResponse{textResponse(`["c-0"]`)}}
+	agent := newReplayAgent(replayRepository(t), client)
+	agent.args.Template.MaxTokens = 1_000
+	agent.args.CommentCollector.Add(authRevalidationFinding("allow := true"))
+	agent.diffs = []model.Diff{{
+		OldPath: "evidence.go", NewPath: "evidence.go",
+		Diff:           "@@ -1 +1 @@\n-old contract\n+decisive current contract",
+		NewFileContent: strings.Repeat("// verifier evidence padding\n", 2_000),
+	}}
+	record := agent.Session().GetOrCreateFileSession("app.go").AppendTaskRecord(session.MainTask, nil)
+	record.AddToolResult("file_read", `{"file_path":"evidence.go"}`, "raw referenced source")
+
+	agent.executeReviewFilter(context.Background(), model.Diff{
+		NewPath: "app.go", Diff: "@@\n+allow := true", NewFileContent: "allow := true",
+	}, "app.go", 1)
+
+	prompt := ""
+	if len(client.requests) == 1 {
+		prompt = requestText(client.requests[0])
+	}
+	if findings, warnings := agent.args.CommentCollector.Comments(), agent.Warnings(); len(findings) != 1 || len(warnings) != 0 ||
+		!strings.Contains(prompt, `"tool_name":"current_diff"`) ||
+		!strings.Contains(prompt, "decisive current contract") || strings.Contains(prompt, "verifier evidence padding") {
+		t.Fatalf("findings = %#v; warnings = %#v; verifier prompt = %s", findings, warnings, prompt)
+	}
+}
+
 func TestReviewVerifierRecoversFromOneMalformedResponse(t *testing.T) {
 	responses := reviewResponses([]map[string]any{authCandidate()}, "not-json")
 	responses = append(responses, textResponse(`["c-0"]`))

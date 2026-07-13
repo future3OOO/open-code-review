@@ -593,7 +593,14 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 		).Replace(m.Content)
 		messages = append(messages, llm.NewTextMessage(m.Role, content))
 	}
-	evidence, err := a.reviewFilterEvidence(newPath)
+	evidenceBudget := 0
+	if limit := a.args.Template.MaxTokens * 4 / 5; limit > 0 {
+		evidenceBudget = limit - countMessagesTokens(messages)
+		if evidenceBudget < 1 {
+			evidenceBudget = 1
+		}
+	}
+	evidence, err := a.reviewFilterEvidence(newPath, evidenceBudget)
 	if err != nil {
 		a.discardUnverifiedComments(newPath, comments, "main review evidence could not be encoded")
 		return
