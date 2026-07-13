@@ -200,7 +200,7 @@ func (c *referencedSourceReviewClient) CompletionsWithCtx(_ context.Context, req
 				FilePath string `json:"file_path"`
 				Start    int    `json:"start_line"`
 				End      int    `json:"end_line"`
-			}{FilePath: "evidence.go", Start: 1, End: 1}),
+			}{FilePath: "evidence.go", Start: 1, End: 500}),
 			toolCall("code_comment", map[string]any{"comments": []map[string]any{claim}}),
 		), nil
 	}
@@ -208,19 +208,23 @@ func (c *referencedSourceReviewClient) CompletionsWithCtx(_ context.Context, req
 }
 
 func TestReviewVerifierReceivesCurrentReferencedSource(t *testing.T) {
+	largeSource := "package app\n\nfunc decisiveHash() string { return \"hash16\" }\n" +
+		strings.Repeat("// verifier evidence padding 0123456789012345678901234567890123456789\n", 350)
 	tests := []struct {
 		name, content, evidence string
 	}{
 		{name: "non-empty", content: "package app\n\nfunc decisiveHash() string { return \"hash16\" }\n", evidence: "decisiveHash"},
 		{name: "empty", evidence: `"tool_name":"current_file"`},
+		{name: "large", content: largeSource, evidence: "decisiveHash"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			repoDir := replayRepository(t)
 			writeReplayFile(t, repoDir, "evidence.go", test.content)
 			client := &referencedSourceReviewClient{}
+			agent := newReplayAgent(repoDir, client)
 
-			findings := mustRunAgent(t, newReplayAgent(repoDir, client))
+			findings := mustRunAgent(t, agent)
 			var verifierPrompt strings.Builder
 			for _, request := range client.requests {
 				text := requestText(request)
@@ -228,8 +232,9 @@ func TestReviewVerifierReceivesCurrentReferencedSource(t *testing.T) {
 					verifierPrompt.WriteString(text)
 				}
 			}
-			if prompt := verifierPrompt.String(); len(findings) != 0 || !strings.Contains(prompt, test.evidence) {
-				t.Fatalf("findings = %#v; verifier prompt = %s", findings, prompt)
+			if prompt := verifierPrompt.String(); len(findings) != 0 || len(agent.Warnings()) != 0 ||
+				!strings.Contains(prompt, test.evidence) || strings.Contains(prompt, `"tool_name":"file_read"`) {
+				t.Fatalf("findings = %#v; warnings = %#v; verifier prompt = %s", findings, agent.Warnings(), prompt)
 			}
 		})
 	}

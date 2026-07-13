@@ -76,14 +76,18 @@ func (a *Agent) reviewFilterEvidence(path string) (string, error) {
 	}
 	evidence := make([]evidenceRecord, 0, len(results))
 	referencedPaths := make(map[string]struct{})
+	hasCurrentSource := func(referencedPath string) bool {
+		if referencedPath == path {
+			return true
+		}
+		referenced := a.findDiff(referencedPath)
+		return referenced != nil && !referenced.IsDeleted && !referenced.IsBinary
+	}
 	for _, result := range results {
 		if result.ToolName == reviewtool.CodeComment.Name() {
 			continue
 		}
-		evidence = append(evidence, evidenceRecord{
-			ReviewPath: path, ToolName: result.ToolName,
-			Arguments: result.Arguments, Result: result.Result,
-		})
+		includeRawResult := true
 		switch result.ToolName {
 		case reviewtool.FileRead.Name():
 			var args struct {
@@ -91,16 +95,27 @@ func (a *Agent) reviewFilterEvidence(path string) (string, error) {
 			}
 			if json.Unmarshal([]byte(result.Arguments), &args) == nil && args.FilePath != "" {
 				referencedPaths[args.FilePath] = struct{}{}
+				includeRawResult = !hasCurrentSource(args.FilePath)
 			}
 		case reviewtool.FileReadDiff.Name():
 			var args struct {
 				PathArray []string `json:"path_array"`
 			}
-			if json.Unmarshal([]byte(result.Arguments), &args) == nil {
+			if json.Unmarshal([]byte(result.Arguments), &args) == nil && len(args.PathArray) > 0 {
+				includeRawResult = false
 				for _, referencedPath := range args.PathArray {
 					referencedPaths[referencedPath] = struct{}{}
+					if !hasCurrentSource(referencedPath) {
+						includeRawResult = true
+					}
 				}
 			}
+		}
+		if includeRawResult {
+			evidence = append(evidence, evidenceRecord{
+				ReviewPath: path, ToolName: result.ToolName,
+				Arguments: result.Arguments, Result: result.Result,
+			})
 		}
 	}
 	paths := make([]string, 0, len(referencedPaths))
