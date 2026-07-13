@@ -187,6 +187,18 @@ func (fs *FileSession) AppendTaskRecord(taskType TaskType, messages []llm.Messag
 	return rec
 }
 
+// ToolResults returns a stable snapshot of tool evidence gathered for a task.
+func (fs *FileSession) ToolResults(taskType TaskType) []ToolResultRecord {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	var results []ToolResultRecord
+	for _, record := range fs.TaskRecords[taskType] {
+		results = append(results, record.ToolResults...)
+	}
+	return results
+}
+
 // copyMessages returns a deep copy of a messages slice so that future mutations
 // don't corrupt stored records.
 func copyMessages(msgs []llm.Message) []llm.Message {
@@ -299,15 +311,20 @@ func (sh *SessionHistory) LLMFailures() int64 {
 // AddToolResult appends a tool call result to this task record and writes a
 // tool_call record to the JSONL stream.
 func (tr *TaskRecord) AddToolResult(toolName, arguments, result string) {
-	tr.ToolResults = append(tr.ToolResults, ToolResultRecord{
+	record := ToolResultRecord{
 		ToolName:  toolName,
 		Arguments: arguments,
 		Result:    result,
-	})
+	}
 
 	if fs := tr.fileSession; fs != nil {
+		fs.mu.Lock()
+		tr.ToolResults = append(tr.ToolResults, record)
+		fs.mu.Unlock()
 		if p := fs.session.persist; p != nil {
 			p.WriteToolCall(fs.FilePath, tr.Type, toolName, arguments, result, true, 0)
 		}
+		return
 	}
+	tr.ToolResults = append(tr.ToolResults, record)
 }
