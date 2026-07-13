@@ -260,6 +260,91 @@ func TestReviewVerifierMarksOversizedMainEvidenceIncomplete(t *testing.T) {
 	}
 }
 
+func TestReviewVerifierFallsBackToCurrentDiffWithinEvidenceBudget(t *testing.T) {
+	client := &reviewTestClient{responses: []*llm.ChatResponse{textResponse(`["c-0"]`)}}
+	agent := newReplayAgent(replayRepository(t), client)
+	agent.args.Template.MaxTokens = 1_000
+	agent.args.CommentCollector.Add(authRevalidationFinding("allow := true"))
+	agent.diffs = []model.Diff{{
+		OldPath: "evidence.go", NewPath: "evidence.go",
+		Diff:           "@@ -1 +1 @@\n-old contract\n+decisive current contract",
+		NewFileContent: strings.Repeat("// verifier evidence padding\n", 2_000),
+	}}
+	record := agent.Session().GetOrCreateFileSession("app.go").AppendTaskRecord(session.MainTask, nil)
+	record.AddToolResult("file_read", `{"file_path":"evidence.go"}`, "raw referenced source")
+
+	agent.executeReviewFilter(context.Background(), model.Diff{
+		NewPath: "app.go", Diff: "@@\n+allow := true", NewFileContent: "allow := true",
+	}, "app.go", 1)
+
+	prompt := ""
+	if len(client.requests) == 1 {
+		prompt = requestText(client.requests[0])
+	}
+	if findings, warnings := agent.args.CommentCollector.Comments(), agent.Warnings(); len(findings) != 1 || len(warnings) != 0 ||
+		!strings.Contains(prompt, `"tool_name":"current_diff"`) ||
+		!strings.Contains(prompt, "decisive current contract") || strings.Contains(prompt, "verifier evidence padding") {
+		t.Fatalf("findings = %#v; warnings = %#v; verifier prompt = %s", findings, warnings, prompt)
+	}
+}
+
+func TestReviewVerifierKeepsCurrentSourceWhenDiffWouldIncreaseEvidence(t *testing.T) {
+	client := &reviewTestClient{responses: []*llm.ChatResponse{textResponse(`["c-0"]`)}}
+	agent := newReplayAgent(replayRepository(t), client)
+	agent.args.Template.MaxTokens = 1_000
+	agent.args.CommentCollector.Add(authRevalidationFinding("allow := true"))
+	agent.diffs = []model.Diff{
+		{
+			OldPath: "a.go", NewPath: "a.go",
+			Diff: strings.Repeat("-deleted historical line\n", 400), NewFileContent: "package a\n",
+		},
+		{
+			OldPath: "z.go", NewPath: "z.go",
+			Diff:           "@@ -1 +1 @@\n-old contract\n+decisive current contract",
+			NewFileContent: strings.Repeat("// verifier evidence padding\n", 2_000),
+		},
+	}
+	record := agent.Session().GetOrCreateFileSession("app.go").AppendTaskRecord(session.MainTask, nil)
+	record.AddToolResult("file_read", `{"file_path":"a.go"}`, "raw a source")
+	record.AddToolResult("file_read", `{"file_path":"z.go"}`, "raw z source")
+
+	agent.executeReviewFilter(context.Background(), model.Diff{
+		NewPath: "app.go", Diff: "@@\n+allow := true", NewFileContent: "allow := true",
+	}, "app.go", 1)
+
+	prompt := ""
+	if len(client.requests) == 1 {
+		prompt = requestText(client.requests[0])
+	}
+	if findings, warnings := agent.args.CommentCollector.Comments(), agent.Warnings(); len(findings) != 1 || len(warnings) != 0 ||
+		!strings.Contains(prompt, `"review_path":"a.go","tool_name":"current_file"`) ||
+		!strings.Contains(prompt, `"review_path":"z.go","tool_name":"current_diff"`) ||
+		strings.Contains(prompt, "deleted historical line") || strings.Contains(prompt, "verifier evidence padding") {
+		t.Fatalf("findings = %#v; warnings = %#v; verifier prompt = %s", findings, warnings, prompt)
+	}
+}
+
+func TestReviewVerifierRejectsOversizedBasePromptBeforeEvidence(t *testing.T) {
+	client := &reviewTestClient{}
+	agent := newReplayAgent(replayRepository(t), client)
+	agent.args.Template.MaxTokens = 100
+	agent.args.CommentCollector.Add(authRevalidationFinding("allow := true"))
+	record := agent.Session().GetOrCreateFileSession("app.go").AppendTaskRecord(session.MainTask, nil)
+	record.AddToolResult("file_read_diff", "{}", "unused evidence")
+
+	agent.executeReviewFilter(context.Background(), model.Diff{
+		NewPath: "app.go", Diff: "@@\n+allow := true",
+		NewFileContent: strings.Repeat("// oversized verifier base prompt\n", 1_000),
+	}, "app.go", 1)
+
+	warnings := agent.Warnings()
+	if len(client.requests) != 0 || len(agent.args.CommentCollector.Comments()) != 0 || len(warnings) != 1 ||
+		warnings[0].Type != "verification_incomplete" ||
+		!strings.Contains(warnings[0].Message, "review verifier context exceeds") {
+		t.Fatalf("requests = %d; comments = %#v; warnings = %#v", len(client.requests), agent.args.CommentCollector.Comments(), warnings)
+	}
+}
+
 func TestReviewVerifierRecoversFromOneMalformedResponse(t *testing.T) {
 	responses := reviewResponses([]map[string]any{authCandidate()}, "not-json")
 	responses = append(responses, textResponse(`["c-0"]`))
