@@ -15,7 +15,7 @@ func TestCodexCodeClientReturnsToolCallsFromStructuredOutput(t *testing.T) {
 	runCodexCodeCommand = func(_ context.Context, command []string, prompt string, _ []string) ([]byte, error) {
 		for _, required := range []string{
 			"exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
-			"--model", "gpt-5.6-sol", "--color", "never", "--output-schema", "-",
+			"--model", "gpt-5.6-sol", "--color", "never", "--json", "--output-schema", "-",
 		} {
 			if !slices.Contains(command, required) {
 				t.Fatalf("command missing %q: %#v", required, command)
@@ -44,7 +44,8 @@ func TestCodexCodeClientReturnsToolCallsFromStructuredOutput(t *testing.T) {
 			!strings.Contains(prompt, `"arguments":{"type":"string"}`) {
 			t.Fatalf("Codex arguments contract is not a JSON string: schema = %s; prompt = %s", schema, prompt)
 		}
-		return []byte(`{"content":"","tool_calls":[{"id":"call-1","name":"code_comment","arguments":"{\"comments\":[]}"}]}`), nil
+		return []byte("{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"content\\\":\\\"\\\",\\\"tool_calls\\\":[{\\\"id\\\":\\\"call-1\\\",\\\"name\\\":\\\"code_comment\\\",\\\"arguments\\\":\\\"{\\\\\\\"comments\\\\\\\":[]}\\\"}]}\"}}\n" +
+			"{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":24763,\"cached_input_tokens\":24448,\"output_tokens\":122,\"reasoning_output_tokens\":0}}\n"), nil
 	}
 	t.Cleanup(func() { runCodexCodeCommand = oldRunner })
 
@@ -66,6 +67,9 @@ func TestCodexCodeClientReturnsToolCallsFromStructuredOutput(t *testing.T) {
 	if len(calls) != 1 || calls[0].Function.Name != "code_comment" || calls[0].Function.Arguments != `{"comments":[]}` {
 		t.Fatalf("tool calls = %#v", calls)
 	}
+	if response.Usage == nil || response.Usage.PromptTokens != 24763 || response.Usage.CompletionTokens != 122 || response.Usage.TotalTokens != 24885 || response.Usage.CacheReadTokens != 24448 {
+		t.Fatalf("usage = %#v", response.Usage)
+	}
 	if _, err := os.Stat(schemaPath); !os.IsNotExist(err) {
 		t.Fatalf("schema file was not removed: %v", err)
 	}
@@ -81,6 +85,20 @@ func TestCodexCodeClientLabelsPromptMarshalFailure(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "marshal Codex prompt") {
 		t.Fatalf("error = %v, want Codex prompt marshal context", err)
+	}
+}
+
+func TestCodexCodeClientRejectsMissingTerminalUsage(t *testing.T) {
+	oldRunner := runCodexCodeCommand
+	runCodexCodeCommand = func(_ context.Context, _ []string, _ string, _ []string) ([]byte, error) {
+		return []byte(`{"type":"item.completed","item":{"type":"agent_message","text":"{\"content\":\"ok\",\"tool_calls\":[]}"}}`), nil
+	}
+	t.Cleanup(func() { runCodexCodeCommand = oldRunner })
+
+	client := NewLLMClient(ResolvedEndpoint{Protocol: "codex-code", Model: "gpt-5.6-sol"})
+	_, err := client.CompletionsWithCtx(context.Background(), ChatRequest{Messages: []Message{NewTextMessage("user", "review")}})
+	if err == nil || !strings.Contains(err.Error(), "terminal usage") {
+		t.Fatalf("error = %v, want missing terminal usage", err)
 	}
 }
 
