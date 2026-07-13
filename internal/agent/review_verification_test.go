@@ -153,6 +153,21 @@ func TestReviewVerifierRecoversFromOneMalformedResponse(t *testing.T) {
 	}
 }
 
+func TestReviewVerifierCorrectiveAttemptRechecksTokenLimit(t *testing.T) {
+	client := &reviewTestClient{responses: reviewResponses(
+		[]map[string]any{authCandidate()}, strings.Repeat("invalid ", 9_000),
+	)}
+
+	findings, agent := runReplay(t, replayRepository(t), client)
+	warnings := agent.Warnings()
+	if len(findings) != 0 || len(warnings) != 1 || warnings[0].Type != "verification_incomplete" {
+		t.Fatalf("findings = %#v; warnings = %#v", findings, warnings)
+	}
+	if len(client.requests) != 3 {
+		t.Fatalf("requests = %d, want corrective attempt stopped before provider call", len(client.requests))
+	}
+}
+
 func TestReviewVerifierFailuresAreIncompleteAndFailClosed(t *testing.T) {
 	cases := []struct {
 		name    string
