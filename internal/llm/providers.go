@@ -6,12 +6,13 @@ import (
 )
 
 const protocolClaudeCode = "claude-code"
+const protocolCodexCode = "codex-code"
 
 // Provider holds the preset configuration for a known LLM provider.
 type Provider struct {
 	Name        string
 	DisplayName string
-	Protocol    string // "anthropic" or "openai"
+	Protocol    string // HTTP or native CLI protocol
 	BaseURL     string
 	AuthHeader  string // Anthropic-only; empty for OpenAI-compatible
 	EnvVar      string // environment variable name for API key fallback
@@ -54,6 +55,14 @@ var registry = []Provider{
 			"claude-opus-4-7",
 			"claude-opus-4-6",
 			"claude-sonnet-4-6",
+		},
+	},
+	{
+		Name:        "codex-code",
+		DisplayName: "Codex CLI",
+		Protocol:    protocolCodexCode,
+		Models: []string{
+			"gpt-5.4",
 		},
 	},
 	{
