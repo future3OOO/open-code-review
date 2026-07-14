@@ -73,6 +73,24 @@ func TestLoadDefault_PlaceholdersPresent(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultReviewFilterRequiresProductionReachabilityForSeverity(t *testing.T) {
+	tpl, err := LoadDefault()
+	if err != nil {
+		t.Fatalf("LoadDefault() error: %v", err)
+	}
+	prompt := tpl.ReviewFilterTask.Messages[0].Content
+	for _, required := range []string{
+		"realistic production trigger",
+		"attacker-controlled trigger",
+		"theoretical resource growth",
+		"reject the candidate",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("verifier prompt missing %q: %s", required, prompt)
+		}
+	}
+}
+
 func TestValidate_PassesOnDefault(t *testing.T) {
 	tpl, err := LoadDefault()
 	if err != nil {
