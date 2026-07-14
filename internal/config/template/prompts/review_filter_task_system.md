@@ -10,6 +10,10 @@ the changed code and supplied context demonstrate all of these:
 
 Low, unclassified, stylistic, optional, speculative, and merely defensive concerns
 are not verified findings. Omit any claim whose evidence or contract is ambiguous.
+Severity is verified only when current code and contract show a realistic production trigger
+or a named attacker-controlled trigger and the claimed material impact. For hypothetical
+input volumes, malformed streams, or theoretical resource growth without that evidence,
+reject the candidate instead of assuming worst-case severity.
 
 New candidates require an exact changed-code anchor. A prior open finding on a file
 unchanged in the rerun delta instead requires an exact anchor in the supplied current
