@@ -78,6 +78,9 @@ func TestLoadDefaultReviewFilterRequiresProductionReachabilityForSeverity(t *tes
 	if err != nil {
 		t.Fatalf("LoadDefault() error: %v", err)
 	}
+	if tpl.ReviewFilterTask == nil || len(tpl.ReviewFilterTask.Messages) == 0 {
+		t.Fatal("ReviewFilterTask has no messages")
+	}
 	prompt := tpl.ReviewFilterTask.Messages[0].Content
 	for _, required := range []string{
 		"realistic production trigger",
