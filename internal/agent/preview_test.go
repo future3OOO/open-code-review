@@ -1,11 +1,23 @@
 package agent
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/open-code-review/open-code-review/internal/config/rules"
 	"github.com/open-code-review/open-code-review/internal/model"
 )
+
+func TestCoverageMarshalsEmptyFilesAsArray(t *testing.T) {
+	payload, err := json.Marshal(New(Args{}).Coverage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(payload, []byte(`"files":[]`)) {
+		t.Fatalf("coverage = %s, want empty files array", payload)
+	}
+}
 
 func TestWhyExcluded_BinaryFile(t *testing.T) {
 	agent := New(Args{})

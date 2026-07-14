@@ -66,7 +66,7 @@ func (a *Agent) Coverage() ReviewCoverage {
 		EligibleFiles: a.coverage.ReviewableCount,
 		ReviewedFiles: reviewed,
 		ExcludedFiles: a.coverage.ExcludedCount,
-		Files:         append([]DiffPreviewEntry(nil), a.coverage.Entries...),
+		Files:         append(make([]DiffPreviewEntry, 0, len(a.coverage.Entries)), a.coverage.Entries...),
 	}
 }
 
