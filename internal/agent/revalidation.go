@@ -71,24 +71,36 @@ func (a *Agent) seedRevalidationFindings(d model.Diff) {
 	}
 }
 
-func reviewFilterCurrentSource(content string, findings []model.LlmComment) string {
+func reviewFilterCurrentSource(content string, findings []model.LlmComment, tokenBudget int) string {
 	if content == "" || len(findings) == 0 {
 		return ""
 	}
 	lines := strings.Split(content, "\n")
-	var source strings.Builder
+	source := ""
+	seen := make(map[[2]int]struct{})
 	for _, finding := range findings {
 		if finding.StartLine <= 0 || finding.EndLine < finding.StartLine || finding.StartLine > len(lines) {
 			continue
 		}
 		start := max(1, finding.StartLine-reviewFilterAnchorContextLines)
 		end := min(len(lines), finding.EndLine+reviewFilterAnchorContextLines)
-		fmt.Fprintf(&source, "Lines %d-%d:\n", start, end)
-		for line := start; line <= end; line++ {
-			fmt.Fprintf(&source, "%d|%s\n", line, lines[line-1])
+		key := [2]int{start, end}
+		if _, ok := seen[key]; ok {
+			continue
 		}
+		var window strings.Builder
+		fmt.Fprintf(&window, "Lines %d-%d:\n", start, end)
+		for line := start; line <= end; line++ {
+			fmt.Fprintf(&window, "%d|%s\n", line, lines[line-1])
+		}
+		candidate := strings.TrimSpace(source + "\n" + window.String())
+		if tokenBudget >= 0 && llm.CountTokens(candidate) > tokenBudget {
+			continue
+		}
+		source = candidate
+		seen[key] = struct{}{}
 	}
-	return strings.TrimSpace(source.String())
+	return source
 }
 
 func (a *Agent) reviewFilterEvidence(path string, tokenBudget int) (string, error) {
@@ -183,7 +195,7 @@ func (a *Agent) reviewFilterEvidence(path string, tokenBudget int) (string, erro
 		return prompt + string(encoded), nil
 	}
 	encoded, err := encode(evidence, false)
-	if err != nil || tokenBudget <= 0 {
+	if err != nil || tokenBudget < 0 {
 		return encoded, err
 	}
 	encodedTokens := llm.CountTokens(encoded)
@@ -228,7 +240,11 @@ func (a *Agent) reviewFilterEvidence(path string, tokenBudget int) (string, erro
 		}
 	}
 	if len(bounded) == 0 {
-		return encode(nil, true)
+		omitted, err := encode(nil, true)
+		if err != nil || llm.CountTokens(omitted) > tokenBudget {
+			return "", err
+		}
+		return omitted, nil
 	}
 	return encoded, nil
 }

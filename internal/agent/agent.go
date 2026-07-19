@@ -579,25 +579,39 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 
 	commentsJSON := buildFilterCommentsJSON(comments, revalidationStart)
 	verificationScope := "Verify new_candidate findings against changed lines. Revalidate prior_open findings against current file content even when their anchors are outside the changed lines."
-	currentSource := reviewFilterCurrentSource(d.NewFileContent, comments[revalidationStart:])
-
-	messages := make([]llm.Message, 0, len(ft.Messages))
-	for _, m := range ft.Messages {
-		content := strings.NewReplacer(
-			"{{path}}", newPath,
-			"{{diff}}", d.Diff,
-			"{{current_file_content}}", currentSource,
-			"{{system_rule}}", a.resolveSystemRule(strings.ToLower(newPath)),
-			"{{requirement_background}}", a.requirementBackground(newPath),
-			"{{verification_scope}}", verificationScope,
-			"{{comments}}", commentsJSON,
-		).Replace(m.Content)
-		messages = append(messages, llm.NewTextMessage(m.Role, content))
+	renderMessages := func(currentSource string) []llm.Message {
+		messages := make([]llm.Message, 0, len(ft.Messages))
+		for _, m := range ft.Messages {
+			content := strings.NewReplacer(
+				"{{path}}", newPath,
+				"{{diff}}", d.Diff,
+				"{{current_file_content}}", currentSource,
+				"{{system_rule}}", a.resolveSystemRule(strings.ToLower(newPath)),
+				"{{requirement_background}}", a.requirementBackground(newPath),
+				"{{verification_scope}}", verificationScope,
+				"{{comments}}", commentsJSON,
+			).Replace(m.Content)
+			messages = append(messages, llm.NewTextMessage(m.Role, content))
+		}
+		return messages
 	}
-	evidenceBudget := 0
+	messages := renderMessages("")
+	sourceBudget := -1
+	if limit := a.args.Template.MaxTokens * 4 / 5; limit > 0 {
+		sourceBudget = limit - countMessagesTokens(messages)
+		if sourceBudget < 0 {
+			a.discardUnverifiedComments(newPath, comments, "review verifier context exceeds the token limit")
+			return
+		}
+	}
+	currentSource := reviewFilterCurrentSource(d.NewFileContent, comments[revalidationStart:], sourceBudget)
+	if currentSource != "" {
+		messages = renderMessages(currentSource)
+	}
+	evidenceBudget := -1
 	if limit := a.args.Template.MaxTokens * 4 / 5; limit > 0 {
 		evidenceBudget = limit - countMessagesTokens(messages)
-		if evidenceBudget <= 0 {
+		if evidenceBudget < 0 {
 			a.discardUnverifiedComments(newPath, comments, "review verifier context exceeds the token limit")
 			return
 		}

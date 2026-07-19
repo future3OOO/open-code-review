@@ -180,6 +180,31 @@ func TestReviewVerifierPreservesTemplateTokensInSource(t *testing.T) {
 	}
 }
 
+func TestReviewVerifierBoundsWidePriorAnchor(t *testing.T) {
+	client := &reviewTestClient{responses: []*llm.ChatResponse{textResponse(`["c-0"]`)}}
+	agent := newReplayAgent(replayRepository(t), client)
+	agent.args.Template.MaxTokens = 500
+	finding := authRevalidationFinding("allow := true")
+	finding.StartLine = 1
+	finding.EndLine = 5_000
+	agent.args.CommentCollector.Add(finding)
+	const sentinel = "whole-file prior source sentinel"
+
+	agent.executeReviewFilter(context.Background(), model.Diff{
+		NewPath: "app.go", Diff: "@@\n+allow := true",
+		NewFileContent: strings.Repeat("// prior source padding\n", 2_500) + sentinel + "\n" +
+			strings.Repeat("// prior source padding\n", 2_500),
+	}, "app.go", 0)
+
+	if len(client.requests) != 1 {
+		t.Fatalf("verifier requests = %d, want 1", len(client.requests))
+	}
+	prompt := requestText(client.requests[0])
+	if findings, warnings := agent.args.CommentCollector.Comments(), agent.Warnings(); len(findings) != 1 || len(warnings) != 0 || strings.Contains(prompt, sentinel) {
+		t.Fatalf("findings = %#v; warnings = %#v; verifier prompt = %s", findings, warnings, prompt)
+	}
+}
+
 func TestReviewVerifierReceivesSiblingDiffEvidenceGatheredByMainReview(t *testing.T) {
 	repoDir := replayRepository(t)
 	writeReplayFile(t, repoDir, "evidence.go", "package app\n\n// offset > 0 requires page_of\n")
@@ -301,6 +326,17 @@ func TestReviewVerifierOmitsOversizedMainEvidenceWithinBudget(t *testing.T) {
 	if findings, warnings := agent.args.CommentCollector.Comments(), agent.Warnings(); len(findings) != 1 || len(warnings) != 0 || !strings.Contains(prompt, "evidence records were omitted") ||
 		strings.Contains(prompt, "sibling evidence") {
 		t.Fatalf("findings = %#v; warnings = %#v; verifier prompt = %s", findings, warnings, prompt)
+	}
+}
+
+func TestReviewVerifierOmitsEvidenceWhenNoticeExceedsBudget(t *testing.T) {
+	agent := newReplayAgent(replayRepository(t), &reviewTestClient{})
+	record := agent.Session().GetOrCreateFileSession("app.go").AppendTaskRecord(session.MainTask, nil)
+	record.AddToolResult("file_read_diff", "{}", strings.Repeat("oversized evidence ", 100))
+
+	evidence, err := agent.reviewFilterEvidence("app.go", 1)
+	if err != nil || evidence != "" {
+		t.Fatalf("evidence = %q; error = %v", evidence, err)
 	}
 }
 
