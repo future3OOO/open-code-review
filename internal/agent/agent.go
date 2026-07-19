@@ -579,13 +579,14 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 
 	commentsJSON := buildFilterCommentsJSON(comments, revalidationStart)
 	verificationScope := "Verify new_candidate findings against changed lines. Revalidate prior_open findings against current file content even when their anchors are outside the changed lines."
+	currentSource := reviewFilterCurrentSource(d.NewFileContent, comments[revalidationStart:])
 
 	messages := make([]llm.Message, 0, len(ft.Messages))
 	for _, m := range ft.Messages {
 		content := strings.NewReplacer(
 			"{{path}}", newPath,
 			"{{diff}}", d.Diff,
-			"{{current_file_content}}", d.NewFileContent,
+			"{{current_file_content}}", currentSource,
 			"{{system_rule}}", a.resolveSystemRule(strings.ToLower(newPath)),
 			"{{requirement_background}}", a.requirementBackground(newPath),
 			"{{verification_scope}}", verificationScope,
@@ -995,7 +996,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		var results []tool.ToolCallResult
 		taskCompleted := false
 		hasValidResult := false
-		toolFailed := false
+		failedTool := ""
 
 		for _, call := range calls {
 			cp := a.executeToolCall(ctx, newPath, call, rec)
@@ -1016,7 +1017,9 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 					Result:     cp.Data,
 				})
 				if strings.HasPrefix(cp.Data, "Error") {
-					toolFailed = true
+					if failedTool == "" {
+						failedTool = call.Function.Name
+					}
 				} else {
 					hasValidResult = true
 				}
@@ -1026,12 +1029,14 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 					Name:       call.Function.Name,
 					Result:     "Error: Tool execution returned no result.",
 				})
-				toolFailed = true
+				if failedTool == "" {
+					failedTool = call.Function.Name
+				}
 			}
 		}
 
-		if toolFailed {
-			return fmt.Errorf("review task returned a failed tool call")
+		if failedTool != "" {
+			return fmt.Errorf("review task tool %q failed", failedTool)
 		}
 		if taskCompleted {
 			completed = true

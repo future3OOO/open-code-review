@@ -106,10 +106,53 @@ func TestReviewReplayConvergesOnPositivelyVerifiedFindings(t *testing.T) {
 					t.Fatalf("verifier request missing %s: %s", field, request)
 				}
 			}
-			if strings.Contains(request, "{{current_file_content}}") || !strings.Contains(request, "FULL=package app") {
-				t.Fatalf("verifier request missing current source context: %s", request)
+			if strings.Contains(request, "{{current_file_content}}") || strings.Contains(request, "FULL=package app") ||
+				!strings.Contains(request, "allow := true") {
+				t.Fatalf("verifier request contains whole source or omits changed evidence: %s", request)
 			}
 		}
+	}
+}
+
+func TestReviewVerifierDoesNotEmbedWholeLargeFile(t *testing.T) {
+	repoDir := t.TempDir()
+	runTestGit(t, repoDir, "init", "-q")
+	runTestGit(t, repoDir, "config", "user.email", "review@example.com")
+	runTestGit(t, repoDir, "config", "user.name", "Review Test")
+	const sentinel = "// whole-file-only sentinel\n"
+	base := sentinel + strings.Repeat("// unchanged padding\n", 5_000) +
+		"func changed() {\n\tallow := false\n\t_ = allow\n}\n"
+	writeReplayFile(t, repoDir, "app.go", base)
+	runTestGit(t, repoDir, "commit", "-qm", "base")
+	writeReplayFile(t, repoDir, "app.go", strings.Replace(base, "allow := false", "allow := true", 1))
+
+	client := &reviewTestClient{responses: reviewResponses([]map[string]any{authCandidate()}, `["c-0"]`)}
+	agent := newReplayAgent(repoDir, client)
+	agent.args.Template.MaxTokens = 2_000
+	findings := mustRunAgent(t, agent)
+
+	if len(findings) != 1 || len(agent.Warnings()) != 0 || agent.Coverage().Status != "complete" {
+		t.Fatalf("findings = %#v; warnings = %#v; coverage = %#v", findings, agent.Warnings(), agent.Coverage())
+	}
+	if verifierPrompt := requestText(client.requests[2]); strings.Contains(verifierPrompt, sentinel) ||
+		!strings.Contains(verifierPrompt, "allow := true") {
+		t.Fatalf("verifier prompt contains whole file or omits changed evidence: %s", verifierPrompt)
+	}
+}
+
+func TestReviewToolFailureIdentifiesFailedTool(t *testing.T) {
+	client := &reviewTestClient{responses: []*llm.ChatResponse{
+		toolResponse("file_read", struct {
+			FilePath string `json:"file_path"`
+		}{FilePath: "missing.go"}),
+	}}
+	agent := newReplayAgent(replayRepository(t), client)
+
+	findings, err := agent.Run(context.Background())
+	warnings := agent.Warnings()
+	if err == nil || len(findings) != 0 || len(warnings) != 1 ||
+		!strings.Contains(warnings[0].Message, `tool "file_read" failed`) {
+		t.Fatalf("findings = %#v; error = %v; warnings = %#v", findings, err, warnings)
 	}
 }
 
@@ -126,15 +169,13 @@ func TestReviewForcesCandidatePathToCurrentFile(t *testing.T) {
 func TestReviewVerifierPreservesTemplateTokensInSource(t *testing.T) {
 	repoDir := replayRepository(t)
 	writeReplayFile(t, repoDir, "app.go", "package app\n\nvar template = \"{{comments}}\"\n")
-	claim := authCandidate()
-	claim["existing_code"] = `var template = "{{comments}}"`
-	client := &reviewTestClient{responses: reviewResponses([]map[string]any{claim}, `["c-0"]`)}
+	client := &reviewTestClient{responses: completedReviewResponses(`["c-0"]`)}
+	agent := newReplayAgent(repoDir, client)
+	agent.args.Revalidate = []model.LlmComment{authRevalidationFinding(`var template = "{{comments}}"`)}
 
-	mustRunAgent(t, newReplayAgent(repoDir, client))
-	request := client.requests[2].Messages[0].ExtractText()
-	if !strings.Contains(request, `FULL=package app
-
-var template = "{{comments}}"`) {
+	mustRunAgent(t, agent)
+	request := client.requests[1].Messages[0].ExtractText()
+	if !strings.Contains(request, `3|var template = "{{comments}}"`) {
 		t.Fatalf("verifier rewrote a literal source placeholder: %s", request)
 	}
 }
@@ -241,8 +282,9 @@ func TestReviewVerifierReceivesCurrentReferencedSource(t *testing.T) {
 	}
 }
 
-func TestReviewVerifierMarksOversizedMainEvidenceIncomplete(t *testing.T) {
-	agent := newReplayAgent(replayRepository(t), &reviewTestClient{})
+func TestReviewVerifierOmitsOversizedMainEvidenceWithinBudget(t *testing.T) {
+	client := &reviewTestClient{responses: []*llm.ChatResponse{textResponse(`["c-0"]`)}}
+	agent := newReplayAgent(replayRepository(t), client)
 	agent.args.Template.MaxTokens = 500
 	agent.args.CommentCollector.Add(authRevalidationFinding("allow := true"))
 	record := agent.Session().GetOrCreateFileSession("app.go").AppendTaskRecord(session.MainTask, nil)
@@ -252,11 +294,13 @@ func TestReviewVerifierMarksOversizedMainEvidenceIncomplete(t *testing.T) {
 		NewPath: "app.go", Diff: "@@\n+allow := true", NewFileContent: "allow := true",
 	}, "app.go", 1)
 
-	warnings := agent.Warnings()
-	if len(agent.args.CommentCollector.Comments()) != 0 || len(warnings) != 1 ||
-		warnings[0].Type != "verification_incomplete" ||
-		!strings.Contains(warnings[0].Message, "main review evidence exceeds") {
-		t.Fatalf("comments = %#v; warnings = %#v", agent.args.CommentCollector.Comments(), warnings)
+	prompt := ""
+	if len(client.requests) == 1 {
+		prompt = requestText(client.requests[0])
+	}
+	if findings, warnings := agent.args.CommentCollector.Comments(), agent.Warnings(); len(findings) != 1 || len(warnings) != 0 || !strings.Contains(prompt, "evidence records were omitted") ||
+		strings.Contains(prompt, "sibling evidence") {
+		t.Fatalf("findings = %#v; warnings = %#v; verifier prompt = %s", findings, warnings, prompt)
 	}
 }
 
