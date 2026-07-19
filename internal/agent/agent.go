@@ -604,7 +604,15 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 			return
 		}
 	}
-	currentSource := reviewFilterCurrentSource(d.NewFileContent, comments[revalidationStart:], sourceBudget)
+	priorCount := len(comments) - revalidationStart
+	currentSource, sourcedPrior := priorFindingSource(d.NewFileContent, comments[revalidationStart:], sourceBudget)
+	if revalidationStart == 0 && priorCount > 0 && len(sourcedPrior) == 0 {
+		a.discardUnverifiedComments(newPath, comments, "prior finding source context exceeds the review verifier token limit")
+		return
+	}
+	if len(sourcedPrior) < priorCount {
+		a.recordWarning("verification_incomplete", newPath, "some prior findings lack source context within the review verifier token limit")
+	}
 	if currentSource != "" {
 		messages = renderMessages(currentSource)
 	}
@@ -678,6 +686,12 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 	}
 	remove := make(map[int]struct{}, len(comments))
 	for index, comment := range comments {
+		if index >= revalidationStart {
+			if _, ok := sourcedPrior[index-revalidationStart]; !ok {
+				remove[index] = struct{}{}
+				continue
+			}
+		}
 		if _, ok := verified[index]; !ok || !publishableSeverity(comment.Severity) {
 			remove[index] = struct{}{}
 		}

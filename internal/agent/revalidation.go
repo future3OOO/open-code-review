@@ -71,36 +71,66 @@ func (a *Agent) seedRevalidationFindings(d model.Diff) {
 	}
 }
 
-func reviewFilterCurrentSource(content string, findings []model.LlmComment, tokenBudget int) string {
+func priorFindingSource(content string, findings []model.LlmComment, tokenBudget int) (string, map[int]struct{}) {
 	if content == "" || len(findings) == 0 {
-		return ""
+		return "", nil
 	}
 	lines := strings.Split(content, "\n")
-	source := ""
-	seen := make(map[[2]int]struct{})
-	for _, finding := range findings {
+	type sourceRange struct {
+		start, end int
+		findings   []int
+	}
+	ranges := make([]sourceRange, 0, len(findings))
+	for index, finding := range findings {
 		if finding.StartLine <= 0 || finding.EndLine < finding.StartLine || finding.StartLine > len(lines) {
 			continue
 		}
-		start := max(1, finding.StartLine-reviewFilterAnchorContextLines)
-		end := min(len(lines), finding.EndLine+reviewFilterAnchorContextLines)
-		key := [2]int{start, end}
-		if _, ok := seen[key]; ok {
-			continue
+		ranges = append(ranges, sourceRange{
+			start:    max(1, finding.StartLine-reviewFilterAnchorContextLines),
+			end:      min(len(lines), finding.EndLine+reviewFilterAnchorContextLines),
+			findings: []int{index},
+		})
+	}
+	sort.Slice(ranges, func(i, j int) bool {
+		if ranges[i].start == ranges[j].start {
+			return ranges[i].end < ranges[j].end
 		}
+		return ranges[i].start < ranges[j].start
+	})
+	render := func(current sourceRange) string {
 		var window strings.Builder
-		fmt.Fprintf(&window, "Lines %d-%d:\n", start, end)
-		for line := start; line <= end; line++ {
+		fmt.Fprintf(&window, "Lines %d-%d:\n", current.start, current.end)
+		for line := current.start; line <= current.end; line++ {
 			fmt.Fprintf(&window, "%d|%s\n", line, lines[line-1])
 		}
-		candidate := strings.TrimSpace(source + "\n" + window.String())
+		return strings.TrimSpace(window.String())
+	}
+	merged := make([]sourceRange, 0, len(ranges))
+	for _, current := range ranges {
+		if len(merged) > 0 {
+			previous := &merged[len(merged)-1]
+			combined := sourceRange{start: previous.start, end: max(previous.end, current.end)}
+			if current.start <= previous.end+1 && (tokenBudget < 0 || llm.CountTokens(render(combined)) <= tokenBudget) {
+				previous.end = combined.end
+				previous.findings = append(previous.findings, current.findings...)
+				continue
+			}
+		}
+		merged = append(merged, current)
+	}
+	source := ""
+	included := make(map[int]struct{}, len(findings))
+	for _, current := range merged {
+		candidate := strings.TrimSpace(source + "\n" + render(current))
 		if tokenBudget >= 0 && llm.CountTokens(candidate) > tokenBudget {
 			continue
 		}
 		source = candidate
-		seen[key] = struct{}{}
+		for _, index := range current.findings {
+			included[index] = struct{}{}
+		}
 	}
-	return source
+	return source, included
 }
 
 func (a *Agent) reviewFilterEvidence(path string, tokenBudget int) (string, error) {
