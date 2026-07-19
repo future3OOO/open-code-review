@@ -106,10 +106,53 @@ func TestReviewReplayConvergesOnPositivelyVerifiedFindings(t *testing.T) {
 					t.Fatalf("verifier request missing %s: %s", field, request)
 				}
 			}
-			if strings.Contains(request, "{{current_file_content}}") || !strings.Contains(request, "FULL=package app") {
-				t.Fatalf("verifier request missing current source context: %s", request)
+			if strings.Contains(request, "{{current_file_content}}") || strings.Contains(request, "FULL=package app") ||
+				!strings.Contains(request, "allow := true") {
+				t.Fatalf("verifier request contains whole source or omits changed evidence: %s", request)
 			}
 		}
+	}
+}
+
+func TestReviewVerifierDoesNotEmbedWholeLargeFile(t *testing.T) {
+	repoDir := t.TempDir()
+	runTestGit(t, repoDir, "init", "-q")
+	runTestGit(t, repoDir, "config", "user.email", "review@example.com")
+	runTestGit(t, repoDir, "config", "user.name", "Review Test")
+	const sentinel = "// whole-file-only sentinel\n"
+	base := sentinel + strings.Repeat("// unchanged padding\n", 5_000) +
+		"func changed() {\n\tallow := false\n\t_ = allow\n}\n"
+	writeReplayFile(t, repoDir, "app.go", base)
+	runTestGit(t, repoDir, "commit", "-qm", "base")
+	writeReplayFile(t, repoDir, "app.go", strings.Replace(base, "allow := false", "allow := true", 1))
+
+	client := &reviewTestClient{responses: reviewResponses([]map[string]any{authCandidate()}, `["c-0"]`)}
+	agent := newReplayAgent(repoDir, client)
+	agent.args.Template.MaxTokens = 2_000
+	findings := mustRunAgent(t, agent)
+
+	if len(findings) != 1 || len(agent.Warnings()) != 0 || agent.Coverage().Status != "complete" {
+		t.Fatalf("findings = %#v; warnings = %#v; coverage = %#v", findings, agent.Warnings(), agent.Coverage())
+	}
+	if verifierPrompt := requestText(client.requests[2]); strings.Contains(verifierPrompt, sentinel) ||
+		!strings.Contains(verifierPrompt, "allow := true") {
+		t.Fatalf("verifier prompt contains whole file or omits changed evidence: %s", verifierPrompt)
+	}
+}
+
+func TestReviewToolFailureIdentifiesFailedTool(t *testing.T) {
+	client := &reviewTestClient{responses: []*llm.ChatResponse{
+		toolResponse("file_read", struct {
+			FilePath string `json:"file_path"`
+		}{FilePath: "missing.go"}),
+	}}
+	agent := newReplayAgent(replayRepository(t), client)
+
+	findings, err := agent.Run(context.Background())
+	warnings := agent.Warnings()
+	if err == nil || len(findings) != 0 || len(warnings) != 1 ||
+		!strings.Contains(warnings[0].Message, `tool "file_read" failed`) {
+		t.Fatalf("findings = %#v; error = %v; warnings = %#v", findings, err, warnings)
 	}
 }
 
@@ -126,16 +169,110 @@ func TestReviewForcesCandidatePathToCurrentFile(t *testing.T) {
 func TestReviewVerifierPreservesTemplateTokensInSource(t *testing.T) {
 	repoDir := replayRepository(t)
 	writeReplayFile(t, repoDir, "app.go", "package app\n\nvar template = \"{{comments}}\"\n")
-	claim := authCandidate()
-	claim["existing_code"] = `var template = "{{comments}}"`
-	client := &reviewTestClient{responses: reviewResponses([]map[string]any{claim}, `["c-0"]`)}
+	client := &reviewTestClient{responses: completedReviewResponses(`["c-0"]`)}
+	agent := newReplayAgent(repoDir, client)
+	agent.args.Revalidate = []model.LlmComment{authRevalidationFinding(`var template = "{{comments}}"`)}
 
-	mustRunAgent(t, newReplayAgent(repoDir, client))
-	request := client.requests[2].Messages[0].ExtractText()
-	if !strings.Contains(request, `FULL=package app
-
-var template = "{{comments}}"`) {
+	mustRunAgent(t, agent)
+	request := client.requests[1].Messages[0].ExtractText()
+	if !strings.Contains(request, `3|var template = "{{comments}}"`) {
 		t.Fatalf("verifier rewrote a literal source placeholder: %s", request)
+	}
+}
+
+func TestReviewVerifierRejectsPriorFindingWithoutSourceBudget(t *testing.T) {
+	client := &reviewTestClient{responses: []*llm.ChatResponse{textResponse(`["c-0"]`)}}
+	agent := newReplayAgent(replayRepository(t), client)
+	agent.args.Template.MaxTokens = 500
+	finding := authRevalidationFinding("allow := true")
+	finding.StartLine = 1
+	finding.EndLine = 5_000
+	agent.args.CommentCollector.Add(finding)
+	const sentinel = "whole-file prior source sentinel"
+
+	agent.executeReviewFilter(context.Background(), model.Diff{
+		NewPath: "app.go", Diff: "@@\n+allow := true",
+		NewFileContent: strings.Repeat("// prior source padding\n", 2_500) + sentinel + "\n" +
+			strings.Repeat("// prior source padding\n", 2_500),
+	}, "app.go", 0)
+
+	findings, warnings := agent.args.CommentCollector.Comments(), agent.Warnings()
+	if len(client.requests) != 0 || len(findings) != 0 || len(warnings) != 1 || warnings[0].Type != "verification_incomplete" {
+		t.Fatalf("requests = %d; findings = %#v; warnings = %#v", len(client.requests), findings, warnings)
+	}
+}
+
+func TestReviewVerifierKeepsNewCandidateWhenPriorSourceDoesNotFit(t *testing.T) {
+	client := &reviewTestClient{responses: []*llm.ChatResponse{textResponse(`["c-0","c-1"]`)}}
+	agent := newReplayAgent(replayRepository(t), client)
+	agent.args.Template.MaxTokens = 500
+	agent.args.CommentCollector.Add(model.LlmComment{
+		Path: "app.go", Content: "new defect", Severity: "high",
+		FailureMode: "new failure", ViolatedContract: "new contract", Evidence: "changed line",
+	})
+	prior := authRevalidationFinding("allow := true")
+	prior.StartLine, prior.EndLine = 1, 5_000
+	agent.args.CommentCollector.Add(prior)
+
+	agent.executeReviewFilter(context.Background(), model.Diff{
+		NewPath: "app.go", Diff: "@@\n+changed", NewFileContent: strings.Repeat("source padding\n", 5_000),
+	}, "app.go", 1)
+
+	findings, warnings := agent.args.CommentCollector.Comments(), agent.Warnings()
+	if len(client.requests) != 1 || len(findings) != 1 || findings[0].Content != "new defect" ||
+		len(warnings) != 1 || warnings[0].Type != "verification_incomplete" {
+		t.Fatalf("requests = %d; findings = %#v; warnings = %#v", len(client.requests), findings, warnings)
+	}
+}
+
+func TestReviewVerifierMergesOverlappingPriorSourceWindows(t *testing.T) {
+	client := &reviewTestClient{responses: []*llm.ChatResponse{textResponse(`["c-0","c-1"]`)}}
+	agent := newReplayAgent(replayRepository(t), client)
+	lines := make([]string, 40)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("line %d", index+1)
+	}
+	first := authRevalidationFinding("line 15")
+	first.StartLine, first.EndLine = 15, 15
+	second := authRevalidationFinding("line 25")
+	second.StartLine, second.EndLine = 25, 25
+	agent.args.CommentCollector.Add(first)
+	agent.args.CommentCollector.Add(second)
+
+	agent.executeReviewFilter(context.Background(), model.Diff{
+		NewPath: "app.go", Diff: "@@\n+changed", NewFileContent: strings.Join(lines, "\n"),
+	}, "app.go", 0)
+
+	findings, warnings := agent.args.CommentCollector.Comments(), agent.Warnings()
+	if len(client.requests) != 1 || len(findings) != 2 || len(warnings) != 0 {
+		t.Fatalf("requests = %d; findings = %#v; warnings = %#v", len(client.requests), findings, warnings)
+	}
+	if prompt := requestText(client.requests[0]); strings.Count(prompt, "20|line 20") != 1 {
+		t.Fatalf("overlapping source line was not merged: %s", prompt)
+	}
+}
+
+func TestPriorFindingSourceKeepsFittingConstituentWhenMergeExceedsBudget(t *testing.T) {
+	lines := make([]string, 80)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("line %d", index+1)
+	}
+	content := strings.Join(lines, "\n")
+	findings := []model.LlmComment{
+		{StartLine: 10, EndLine: 10},
+		{StartLine: 40, EndLine: 40},
+		{StartLine: 50, EndLine: 50},
+	}
+	first, _ := priorFindingSource(content, findings[:1], -1)
+	second, _ := priorFindingSource(content, findings[1:2], -1)
+	budget := llm.CountTokens(strings.TrimSpace(first + "\n" + second))
+
+	source, included := priorFindingSource(content, findings, budget)
+	_, hasFirst := included[0]
+	_, hasSecond := included[1]
+	_, hasThird := included[2]
+	if !hasFirst || !hasSecond || hasThird || !strings.Contains(source, "40|line 40") {
+		t.Fatalf("included = %#v; source = %s", included, source)
 	}
 }
 
@@ -241,8 +378,9 @@ func TestReviewVerifierReceivesCurrentReferencedSource(t *testing.T) {
 	}
 }
 
-func TestReviewVerifierMarksOversizedMainEvidenceIncomplete(t *testing.T) {
-	agent := newReplayAgent(replayRepository(t), &reviewTestClient{})
+func TestReviewVerifierOmitsOversizedMainEvidenceWithinBudget(t *testing.T) {
+	client := &reviewTestClient{responses: []*llm.ChatResponse{textResponse(`["c-0"]`)}}
+	agent := newReplayAgent(replayRepository(t), client)
 	agent.args.Template.MaxTokens = 500
 	agent.args.CommentCollector.Add(authRevalidationFinding("allow := true"))
 	record := agent.Session().GetOrCreateFileSession("app.go").AppendTaskRecord(session.MainTask, nil)
@@ -252,11 +390,24 @@ func TestReviewVerifierMarksOversizedMainEvidenceIncomplete(t *testing.T) {
 		NewPath: "app.go", Diff: "@@\n+allow := true", NewFileContent: "allow := true",
 	}, "app.go", 1)
 
-	warnings := agent.Warnings()
-	if len(agent.args.CommentCollector.Comments()) != 0 || len(warnings) != 1 ||
-		warnings[0].Type != "verification_incomplete" ||
-		!strings.Contains(warnings[0].Message, "main review evidence exceeds") {
-		t.Fatalf("comments = %#v; warnings = %#v", agent.args.CommentCollector.Comments(), warnings)
+	prompt := ""
+	if len(client.requests) == 1 {
+		prompt = requestText(client.requests[0])
+	}
+	if findings, warnings := agent.args.CommentCollector.Comments(), agent.Warnings(); len(findings) != 1 || len(warnings) != 0 || !strings.Contains(prompt, "evidence records were omitted") ||
+		strings.Contains(prompt, "sibling evidence") {
+		t.Fatalf("findings = %#v; warnings = %#v; verifier prompt = %s", findings, warnings, prompt)
+	}
+}
+
+func TestReviewVerifierOmitsEvidenceWhenNoticeExceedsBudget(t *testing.T) {
+	agent := newReplayAgent(replayRepository(t), &reviewTestClient{})
+	record := agent.Session().GetOrCreateFileSession("app.go").AppendTaskRecord(session.MainTask, nil)
+	record.AddToolResult("file_read_diff", "{}", strings.Repeat("oversized evidence ", 100))
+
+	evidence, err := agent.reviewFilterEvidence("app.go", 1)
+	if err != nil || evidence != "" {
+		t.Fatalf("evidence = %q; error = %v", evidence, err)
 	}
 }
 

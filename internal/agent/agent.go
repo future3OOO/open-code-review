@@ -579,24 +579,47 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 
 	commentsJSON := buildFilterCommentsJSON(comments, revalidationStart)
 	verificationScope := "Verify new_candidate findings against changed lines. Revalidate prior_open findings against current file content even when their anchors are outside the changed lines."
-
-	messages := make([]llm.Message, 0, len(ft.Messages))
-	for _, m := range ft.Messages {
-		content := strings.NewReplacer(
-			"{{path}}", newPath,
-			"{{diff}}", d.Diff,
-			"{{current_file_content}}", d.NewFileContent,
-			"{{system_rule}}", a.resolveSystemRule(strings.ToLower(newPath)),
-			"{{requirement_background}}", a.requirementBackground(newPath),
-			"{{verification_scope}}", verificationScope,
-			"{{comments}}", commentsJSON,
-		).Replace(m.Content)
-		messages = append(messages, llm.NewTextMessage(m.Role, content))
+	renderMessages := func(currentSource string) []llm.Message {
+		messages := make([]llm.Message, 0, len(ft.Messages))
+		for _, m := range ft.Messages {
+			content := strings.NewReplacer(
+				"{{path}}", newPath,
+				"{{diff}}", d.Diff,
+				"{{current_file_content}}", currentSource,
+				"{{system_rule}}", a.resolveSystemRule(strings.ToLower(newPath)),
+				"{{requirement_background}}", a.requirementBackground(newPath),
+				"{{verification_scope}}", verificationScope,
+				"{{comments}}", commentsJSON,
+			).Replace(m.Content)
+			messages = append(messages, llm.NewTextMessage(m.Role, content))
+		}
+		return messages
 	}
-	evidenceBudget := 0
+	messages := renderMessages("")
+	sourceBudget := -1
+	if limit := a.args.Template.MaxTokens * 4 / 5; limit > 0 {
+		sourceBudget = limit - countMessagesTokens(messages)
+		if sourceBudget < 0 {
+			a.discardUnverifiedComments(newPath, comments, "review verifier context exceeds the token limit")
+			return
+		}
+	}
+	priorCount := len(comments) - revalidationStart
+	currentSource, sourcedPrior := priorFindingSource(d.NewFileContent, comments[revalidationStart:], sourceBudget)
+	if revalidationStart == 0 && priorCount > 0 && len(sourcedPrior) == 0 {
+		a.discardUnverifiedComments(newPath, comments, "prior finding source context exceeds the review verifier token limit")
+		return
+	}
+	if len(sourcedPrior) < priorCount {
+		a.recordWarning("verification_incomplete", newPath, "some prior findings lack source context within the review verifier token limit")
+	}
+	if currentSource != "" {
+		messages = renderMessages(currentSource)
+	}
+	evidenceBudget := -1
 	if limit := a.args.Template.MaxTokens * 4 / 5; limit > 0 {
 		evidenceBudget = limit - countMessagesTokens(messages)
-		if evidenceBudget <= 0 {
+		if evidenceBudget < 0 {
 			a.discardUnverifiedComments(newPath, comments, "review verifier context exceeds the token limit")
 			return
 		}
@@ -663,6 +686,12 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 	}
 	remove := make(map[int]struct{}, len(comments))
 	for index, comment := range comments {
+		if index >= revalidationStart {
+			if _, ok := sourcedPrior[index-revalidationStart]; !ok {
+				remove[index] = struct{}{}
+				continue
+			}
+		}
 		if _, ok := verified[index]; !ok || !publishableSeverity(comment.Severity) {
 			remove[index] = struct{}{}
 		}
@@ -995,7 +1024,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		var results []tool.ToolCallResult
 		taskCompleted := false
 		hasValidResult := false
-		toolFailed := false
+		failedTool := ""
 
 		for _, call := range calls {
 			cp := a.executeToolCall(ctx, newPath, call, rec)
@@ -1016,7 +1045,9 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 					Result:     cp.Data,
 				})
 				if strings.HasPrefix(cp.Data, "Error") {
-					toolFailed = true
+					if failedTool == "" {
+						failedTool = call.Function.Name
+					}
 				} else {
 					hasValidResult = true
 				}
@@ -1026,12 +1057,14 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 					Name:       call.Function.Name,
 					Result:     "Error: Tool execution returned no result.",
 				})
-				toolFailed = true
+				if failedTool == "" {
+					failedTool = call.Function.Name
+				}
 			}
 		}
 
-		if toolFailed {
-			return fmt.Errorf("review task returned a failed tool call")
+		if failedTool != "" {
+			return fmt.Errorf("review task tool %q failed", failedTool)
 		}
 		if taskCompleted {
 			completed = true
