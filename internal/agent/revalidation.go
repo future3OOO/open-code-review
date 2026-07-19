@@ -77,8 +77,7 @@ func priorFindingSource(content string, findings []model.LlmComment, tokenBudget
 	}
 	lines := strings.Split(content, "\n")
 	type sourceRange struct {
-		start, end int
-		findings   []int
+		start, end, finding int
 	}
 	ranges := make([]sourceRange, 0, len(findings))
 	for index, finding := range findings {
@@ -86,9 +85,9 @@ func priorFindingSource(content string, findings []model.LlmComment, tokenBudget
 			continue
 		}
 		ranges = append(ranges, sourceRange{
-			start:    max(1, finding.StartLine-reviewFilterAnchorContextLines),
-			end:      min(len(lines), finding.EndLine+reviewFilterAnchorContextLines),
-			findings: []int{index},
+			start:   max(1, finding.StartLine-reviewFilterAnchorContextLines),
+			end:     min(len(lines), finding.EndLine+reviewFilterAnchorContextLines),
+			finding: index,
 		})
 	}
 	sort.Slice(ranges, func(i, j int) bool {
@@ -105,30 +104,36 @@ func priorFindingSource(content string, findings []model.LlmComment, tokenBudget
 		}
 		return strings.TrimSpace(window.String())
 	}
-	merged := make([]sourceRange, 0, len(ranges))
-	for _, current := range ranges {
-		if len(merged) > 0 {
-			previous := &merged[len(merged)-1]
-			combined := sourceRange{start: previous.start, end: max(previous.end, current.end)}
-			if current.start <= previous.end+1 && (tokenBudget < 0 || llm.CountTokens(render(combined)) <= tokenBudget) {
-				previous.end = combined.end
-				previous.findings = append(previous.findings, current.findings...)
-				continue
-			}
+	renderAll := func(selected []sourceRange) string {
+		var source strings.Builder
+		for _, current := range selected {
+			fmt.Fprintln(&source, render(current))
 		}
-		merged = append(merged, current)
+		return strings.TrimSpace(source.String())
 	}
+	selected := make([]sourceRange, 0, len(ranges))
 	source := ""
 	included := make(map[int]struct{}, len(findings))
-	for _, current := range merged {
-		candidate := strings.TrimSpace(source + "\n" + render(current))
+	for _, current := range ranges {
+		merge := len(selected) > 0 && current.start <= selected[len(selected)-1].end+1
+		var previous sourceRange
+		if merge {
+			previous = selected[len(selected)-1]
+			selected[len(selected)-1].end = max(previous.end, current.end)
+		} else {
+			selected = append(selected, current)
+		}
+		candidate := renderAll(selected)
 		if tokenBudget >= 0 && llm.CountTokens(candidate) > tokenBudget {
+			if merge {
+				selected[len(selected)-1] = previous
+			} else {
+				selected = selected[:len(selected)-1]
+			}
 			continue
 		}
 		source = candidate
-		for _, index := range current.findings {
-			included[index] = struct{}{}
-		}
+		included[current.finding] = struct{}{}
 	}
 	return source, included
 }

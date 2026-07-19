@@ -252,6 +252,30 @@ func TestReviewVerifierMergesOverlappingPriorSourceWindows(t *testing.T) {
 	}
 }
 
+func TestPriorFindingSourceKeepsFittingConstituentWhenMergeExceedsBudget(t *testing.T) {
+	lines := make([]string, 80)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("line %d", index+1)
+	}
+	content := strings.Join(lines, "\n")
+	findings := []model.LlmComment{
+		{StartLine: 10, EndLine: 10},
+		{StartLine: 40, EndLine: 40},
+		{StartLine: 50, EndLine: 50},
+	}
+	first, _ := priorFindingSource(content, findings[:1], -1)
+	second, _ := priorFindingSource(content, findings[1:2], -1)
+	budget := llm.CountTokens(strings.TrimSpace(first + "\n" + second))
+
+	source, included := priorFindingSource(content, findings, budget)
+	_, hasFirst := included[0]
+	_, hasSecond := included[1]
+	_, hasThird := included[2]
+	if !hasFirst || !hasSecond || hasThird || !strings.Contains(source, "40|line 40") {
+		t.Fatalf("included = %#v; source = %s", included, source)
+	}
+}
+
 func TestReviewVerifierReceivesSiblingDiffEvidenceGatheredByMainReview(t *testing.T) {
 	repoDir := replayRepository(t)
 	writeReplayFile(t, repoDir, "evidence.go", "package app\n\n// offset > 0 requires page_of\n")
