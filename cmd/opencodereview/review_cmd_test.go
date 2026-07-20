@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,6 +95,42 @@ func TestRunReviewPreviewAllowsAbsentAndValidReviewContext(t *testing.T) {
 		if err := runReview(args); err != nil {
 			t.Fatalf("runReview(%v): %v", args, err)
 		}
+	}
+}
+
+func TestRunReviewReportsSuccessfulSameHeadRevalidation(t *testing.T) {
+	repoDir := initReviewTestRepo(t)
+	contextPath := writeReviewContextFile(t, `{"version":1,"paths":{},"revalidate":[{"instance_id":"fi1:review","path":"README.md","content":"stale finding","severity":"medium","failure_mode":"incorrect documentation","violated_contract":"documentation must be accurate","evidence":"the text is incorrect","existing_code":"review me","start_line":1,"end_line":1}]}`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","model":"test-model","content":[{"type":"text","text":"[]"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OCR_LLM_URL", server.URL)
+	t.Setenv("OCR_LLM_TOKEN", "test-token")
+	t.Setenv("OCR_LLM_MODEL", "test-model")
+
+	skipped := captureJSONOutput(t, func() error {
+		return runReview([]string{
+			"--repo", repoDir, "--from", "HEAD", "--to", "HEAD", "--format", "json",
+		})
+	})
+	if skipped["status"] != "skipped" {
+		t.Fatalf("status = %v, want unchanged no-review result", skipped["status"])
+	}
+
+	payload := captureJSONOutput(t, func() error {
+		return runReview([]string{
+			"--repo", repoDir, "--from", "HEAD", "--to", "HEAD",
+			"--format", "json", "--review-context", contextPath,
+		})
+	})
+	if payload["status"] != "success" {
+		t.Fatalf("status = %v, want successful revalidation", payload["status"])
+	}
+	if payload["summary"].(map[string]any)["total_tokens"] != float64(2) {
+		t.Fatalf("summary = %#v, want verifier usage", payload["summary"])
 	}
 }
 
