@@ -170,8 +170,8 @@ func runReview(args []string) error {
 		telemetry.RecordCommentsGenerated(ctx, int64(len(comments)))
 	}
 
-	// If no files were reviewed (e.g. workspace has no changes), inform the caller in JSON mode.
-	if opts.outputFormat == "json" && len(comments) == 0 && ag.FilesReviewed() == 0 {
+	// If neither changed files nor prior findings were reviewed, report a skipped run.
+	if opts.outputFormat == "json" && len(comments) == 0 && ag.FilesReviewed() == 0 && len(agentArgs.Revalidate) == 0 {
 		return outputJSONNoFiles(ag.Coverage(), ag.Warnings())
 	}
 
