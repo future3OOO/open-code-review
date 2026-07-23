@@ -170,19 +170,26 @@ func TestReviewSiblingDiffFailureRetriesWithinExistingBound(t *testing.T) {
 		responses []*llm.ChatResponse
 		wantError bool
 	}{
-		{"corrected", []*llm.ChatResponse{toolCallsResponse(diffCall("missing.go"), doneCall), toolCallsResponse(doneCall)}, false},
+		{"corrected", []*llm.ChatResponse{
+			toolCallsResponse(diffCall("missing.go"), doneCall),
+			toolCallsResponse(diffCall("still-missing.go")),
+			toolCallsResponse(diffCall("still-missing.go")),
+			toolCallsResponse(diffCall("still-missing.go")),
+			toolCallsResponse(doneCall),
+		}, false},
 		{"exhausted", []*llm.ChatResponse{toolCallsResponse(diffCall("missing.go")), toolCallsResponse(diffCall("still-missing.go"))}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := &reviewTestClient{responses: test.responses}
 			agent := newReplayAgent(replayRepository(t), client)
+			agent.args.Template.MaxToolRequestTimes = len(test.responses)
 			agent.args.Tools.Register(tool.NewFileReadDiff(tool.DiffMap{}))
 			findings, err := agent.Run(context.Background())
 			wantStatus := "complete"
 			if test.wantError {
 				wantStatus = "incomplete"
 			}
-			if (err != nil) != test.wantError || len(findings) != 0 || len(client.requests) != 2 ||
+			if (err != nil) != test.wantError || len(findings) != 0 || len(client.requests) != len(test.responses) ||
 				agent.Coverage().Status != wantStatus {
 				t.Fatalf("findings = %#v; error = %v; coverage = %#v; requests = %d", findings, err, agent.Coverage(), len(client.requests))
 			}

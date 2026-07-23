@@ -970,8 +970,6 @@ func formatToolDefs(toolDefs []llm.ToolDef) string {
 // and collects review comments until task_done is called or limits are reached.
 func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message, newPath string) error {
 	toolReqCount := a.args.Template.MaxToolRequestTimes
-	const maxConsecutiveEmptyRounds = 3
-	consecutiveEmptyRounds := 0
 	completed := false
 
 	for toolReqCount > 0 {
@@ -1022,7 +1020,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		}
 
 		var results []tool.ToolCallResult
-		taskCompleted, hasValidResult := false, false
+		taskCompleted := false
 		fatalTool := ""
 		retryableDiffFailure := false
 
@@ -1042,8 +1040,6 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 					} else if fatalTool == "" {
 						fatalTool = call.Function.Name
 					}
-				} else {
-					hasValidResult = true
 				}
 			} else {
 				result = "Error: Tool execution returned no result."
@@ -1069,17 +1065,6 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 			completed = true
 			break
 		}
-		if !hasValidResult {
-			consecutiveEmptyRounds++
-			if consecutiveEmptyRounds >= maxConsecutiveEmptyRounds {
-				fmt.Fprintf(stdout.Writer(), "[ocr] Too many empty retries for %s, stopping.\n", newPath)
-				break
-			}
-			fmt.Fprintf(stdout.Writer(), "[ocr] No valid tool results for %s, retrying...\n", newPath)
-		} else {
-			consecutiveEmptyRounds = 0
-		}
-
 		succeed := a.addNextMessage(ctx, content, calls, results, &messages, newPath)
 		if !succeed {
 			fmt.Fprintf(stdout.Writer(), "[ocr] Context compression exceeded threshold for %s, stopping.\n", newPath)
