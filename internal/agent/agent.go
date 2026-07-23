@@ -1022,49 +1022,48 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		}
 
 		var results []tool.ToolCallResult
-		taskCompleted := false
-		hasValidResult := false
-		failedTool := ""
+		taskCompleted, hasValidResult := false, false
+		fatalTool := ""
+		retryableDiffFailure := false
 
 		for _, call := range calls {
 			cp := a.executeToolCall(ctx, newPath, call, rec)
 			if tool.OfName(call.Function.Name) == tool.TaskDone && !cp.Completed {
 				return fmt.Errorf("review task did not report successful completion")
 			}
+			result := cp.Data
 			if cp.Completed {
-				results = append(results, tool.ToolCallResult{
-					ToolCallID: call.ID,
-					Name:       call.Function.Name,
-					Result:     "Task completed successfully.",
-				})
+				result = "Task completed successfully."
 				taskCompleted = true
-			} else if cp.Data != "" {
-				results = append(results, tool.ToolCallResult{
-					ToolCallID: call.ID,
-					Name:       call.Function.Name,
-					Result:     cp.Data,
-				})
-				if strings.HasPrefix(cp.Data, "Error") {
-					if failedTool == "" {
-						failedTool = call.Function.Name
+			} else if result != "" {
+				if strings.HasPrefix(result, "Error") {
+					if tool.OfName(call.Function.Name) == tool.FileReadDiff && lookupTool(a.args.Tools, tool.FileReadDiff) != nil {
+						retryableDiffFailure = true
+					} else if fatalTool == "" {
+						fatalTool = call.Function.Name
 					}
 				} else {
 					hasValidResult = true
 				}
 			} else {
-				results = append(results, tool.ToolCallResult{
-					ToolCallID: call.ID,
-					Name:       call.Function.Name,
-					Result:     "Error: Tool execution returned no result.",
-				})
-				if failedTool == "" {
-					failedTool = call.Function.Name
+				result = "Error: Tool execution returned no result."
+				if fatalTool == "" {
+					fatalTool = call.Function.Name
 				}
 			}
+			results = append(results, tool.ToolCallResult{ToolCallID: call.ID, Name: call.Function.Name, Result: result})
 		}
 
-		if failedTool != "" {
-			return fmt.Errorf("review task tool %q failed", failedTool)
+		if fatalTool != "" {
+			return fmt.Errorf("review task tool %q failed", fatalTool)
+		}
+		if retryableDiffFailure {
+			taskCompleted = false
+			for i := range results {
+				if results[i].Name == tool.TaskDone.Name() {
+					results[i].Result = "Error: task_done cannot complete a round with a failed file_read_diff call."
+				}
+			}
 		}
 		if taskCompleted {
 			completed = true
