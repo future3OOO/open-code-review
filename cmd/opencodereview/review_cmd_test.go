@@ -188,6 +188,21 @@ func TestReviewAllSupportedFilesFlagControlsDefaultPathExclusions(t *testing.T) 
 	}
 }
 
+func TestReviewPreviewIncludesTypeScriptModuleDeclarations(t *testing.T) {
+	repoDir := initReviewTestRepo(t)
+	for _, path := range []string{"types.d.mts", "types.d.cts"} {
+		if err := os.WriteFile(filepath.Join(repoDir, path), []byte("export interface Value {}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	output := runReviewCommand(t, repoDir)
+
+	if !strings.Contains(output, "Will review (2)") || strings.Contains(output, "unsupported_ext") {
+		t.Fatalf("TypeScript module declarations were excluded:\n%s", output)
+	}
+}
+
 func TestLoadReviewContextRejectsMalformedContext(t *testing.T) {
 	tests := []struct {
 		name string
