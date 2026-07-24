@@ -101,7 +101,7 @@ func TestLoadDefaultPromptsCalibrateRareConcurrencySeverity(t *testing.T) {
 	}
 	rules := []string{
 		"rare scheduling or concurrency races are at most medium when a concrete failure remains unless evidence shows the race is likely under normal production conditions or named attacker control is established; mere reachability is not sufficient",
-		"high or critical concurrency severity requires observed or reproduced production occurrence, a deterministic or near-certain documented workflow trigger, or named attacker control; neither actor availability between observation and mutation nor contract importance establishes likelihood",
+		"high or critical concurrency severity requires an observed or reproduced production occurrence, a deterministic or near-certain documented workflow trigger, or named attacker control; neither actor availability between observation and mutation nor contract importance establishes likelihood",
 	}
 	for name, prompt := range map[string]string{
 		"main":     tpl.MainTask.Messages[0].Content,
