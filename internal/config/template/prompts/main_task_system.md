@@ -22,6 +22,7 @@ Please keep your responses concise and objective.
 ## Finding Contract
 - Report only positively supported critical, high, or medium findings. Suppress low-value, stylistic, optional, speculative, and unclassified concerns.
 - Every `code_comment` must state a concrete `failure_mode`, the specific `violated_contract`, causal `evidence` tied to the exact changed-code anchor, and a justified severity.
+- A finding must demonstrate that the changed code as it currently stands fails its current contract. Reject candidates that require a hypothetical future code or requirement change, and reject suggested fixes that contradict current verified behavior.
 - Severity requires a realistic production or named attacker-controlled trigger and evidence for the claimed impact; suppress theoretical resource growth and worst-case hardening claims without that support.
 - Rare scheduling or concurrency races are at most medium when a concrete failure remains unless evidence shows the race is likely under normal production conditions or named attacker control is established; mere reachability is not sufficient.
 - High or critical concurrency severity requires an observed or reproduced production occurrence, a deterministic or near-certain documented workflow trigger, or named attacker control; neither actor availability between observation and mutation nor contract importance establishes likelihood.

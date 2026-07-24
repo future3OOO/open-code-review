@@ -94,12 +94,13 @@ func TestLoadDefaultReviewFilterRequiresProductionReachabilityForSeverity(t *tes
 	}
 }
 
-func TestLoadDefaultPromptsCalibrateRareConcurrencySeverity(t *testing.T) {
+func TestLoadDefaultPromptsRequireProductionFindingEvidence(t *testing.T) {
 	tpl, err := LoadDefault()
 	if err != nil {
 		t.Fatalf("LoadDefault() error: %v", err)
 	}
 	rules := []string{
+		"a finding must demonstrate that the changed code as it currently stands fails its current contract. reject candidates that require a hypothetical future code or requirement change, and reject suggested fixes that contradict current verified behavior",
 		"rare scheduling or concurrency races are at most medium when a concrete failure remains unless evidence shows the race is likely under normal production conditions or named attacker control is established; mere reachability is not sufficient",
 		"high or critical concurrency severity requires an observed or reproduced production occurrence, a deterministic or near-certain documented workflow trigger, or named attacker control; neither actor availability between observation and mutation nor contract importance establishes likelihood",
 	}
@@ -110,7 +111,7 @@ func TestLoadDefaultPromptsCalibrateRareConcurrencySeverity(t *testing.T) {
 		normalized := strings.Join(strings.Fields(strings.ToLower(prompt)), " ")
 		for _, rule := range rules {
 			if !strings.Contains(normalized, rule) {
-				t.Fatalf("%s prompt missing concurrency severity rule %q: %s", name, rule, prompt)
+				t.Fatalf("%s prompt missing finding evidence rule %q: %s", name, rule, prompt)
 			}
 		}
 	}
