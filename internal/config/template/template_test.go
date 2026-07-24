@@ -81,15 +81,33 @@ func TestLoadDefaultReviewFilterRequiresProductionReachabilityForSeverity(t *tes
 	if tpl.ReviewFilterTask == nil || len(tpl.ReviewFilterTask.Messages) == 0 {
 		t.Fatal("ReviewFilterTask has no messages")
 	}
-	prompt := tpl.ReviewFilterTask.Messages[0].Content
+	prompt := strings.ToLower(tpl.ReviewFilterTask.Messages[0].Content)
 	for _, required := range []string{
 		"realistic production trigger",
 		"attacker-controlled trigger",
 		"theoretical resource growth",
+		"rare scheduling or concurrency races",
+		"named attacker control",
+		"at most medium",
 		"reject the candidate",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("verifier prompt missing %q: %s", required, prompt)
+		}
+	}
+}
+
+func TestLoadDefaultMainTaskCapsUnprovenRareConcurrencySeverity(t *testing.T) {
+	tpl, err := LoadDefault()
+	if err != nil {
+		t.Fatalf("LoadDefault() error: %v", err)
+	}
+	prompt := strings.ToLower(tpl.MainTask.Messages[0].Content)
+	for _, required := range []string{
+		"rare scheduling or concurrency races", "or are attacker-controlled", "at most medium",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("main prompt missing %q: %s", required, prompt)
 		}
 	}
 }
