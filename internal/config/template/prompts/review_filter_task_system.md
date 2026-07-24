@@ -14,6 +14,10 @@ Severity is verified only when current code and contract show a realistic produc
 or a named attacker-controlled trigger and the claimed material impact. For hypothetical
 input volumes, malformed streams, or theoretical resource growth without that evidence,
 reject the candidate instead of assuming worst-case severity.
+Rare scheduling or concurrency races are at most medium when a concrete failure remains unless
+evidence shows the race is likely under normal production conditions or named attacker control
+is established; mere reachability is not sufficient. Reject a critical or high candidate that
+does not meet this threshold.
 
 New candidates require an exact changed-code anchor. A prior open finding on a file
 unchanged in the rerun delta instead requires an exact anchor in the supplied current

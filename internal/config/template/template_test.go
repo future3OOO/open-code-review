@@ -81,7 +81,7 @@ func TestLoadDefaultReviewFilterRequiresProductionReachabilityForSeverity(t *tes
 	if tpl.ReviewFilterTask == nil || len(tpl.ReviewFilterTask.Messages) == 0 {
 		t.Fatal("ReviewFilterTask has no messages")
 	}
-	prompt := tpl.ReviewFilterTask.Messages[0].Content
+	prompt := strings.ToLower(tpl.ReviewFilterTask.Messages[0].Content)
 	for _, required := range []string{
 		"realistic production trigger",
 		"attacker-controlled trigger",
@@ -90,6 +90,22 @@ func TestLoadDefaultReviewFilterRequiresProductionReachabilityForSeverity(t *tes
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("verifier prompt missing %q: %s", required, prompt)
+		}
+	}
+}
+
+func TestLoadDefaultPromptsCalibrateRareConcurrencySeverity(t *testing.T) {
+	tpl, err := LoadDefault()
+	if err != nil {
+		t.Fatalf("LoadDefault() error: %v", err)
+	}
+	const rule = "rare scheduling or concurrency races are at most medium when a concrete failure remains unless evidence shows the race is likely under normal production conditions or named attacker control is established; mere reachability is not sufficient"
+	for name, prompt := range map[string]string{
+		"main":     tpl.MainTask.Messages[0].Content,
+		"verifier": tpl.ReviewFilterTask.Messages[0].Content,
+	} {
+		if !strings.Contains(strings.Join(strings.Fields(strings.ToLower(prompt)), " "), rule) {
+			t.Fatalf("%s prompt missing concurrency severity rule: %s", name, prompt)
 		}
 	}
 }
