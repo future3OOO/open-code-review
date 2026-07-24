@@ -8,6 +8,9 @@ the changed code and supplied context demonstrate all of these:
 - `evidence`: an exact changed-code anchor and a causal explanation connecting it to the failure.
 - `severity`: a justified `critical`, `high`, or `medium` impact.
 
+A finding must demonstrate that the changed code as it currently stands fails its current contract.
+Reject candidates that require a hypothetical future code or requirement change, and reject suggested fixes that contradict current verified behavior.
+
 Low, unclassified, stylistic, optional, speculative, and merely defensive concerns
 are not verified findings. Omit any claim whose evidence or contract is ambiguous.
 Severity is verified only when current code and contract show a realistic production trigger
