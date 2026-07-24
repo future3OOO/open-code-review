@@ -766,3 +766,74 @@ func TestResolveLineNumbers_DiffMarkerInExistingCode(t *testing.T) {
 		t.Errorf("diff marker in existing_code: expected 2..2, got %d..%d", cm.StartLine, cm.EndLine)
 	}
 }
+
+func TestResolveRevalidationCommentRejectsAmbiguousMapping(t *testing.T) {
+	tests := []struct {
+		name    string
+		comment model.LlmComment
+		diff    model.Diff
+	}{
+		{
+			name:    "non-unique current anchor",
+			comment: model.LlmComment{ExistingCode: "target", StartLine: 1, EndLine: 1},
+			diff: model.Diff{
+				Diff:           "@@ -1,2 +1,3 @@\n target\n+target\n other",
+				NewFileContent: "target\ntarget\nother\n",
+			},
+		},
+		{
+			name:    "range overlaps multiple hunks",
+			comment: model.LlmComment{ExistingCode: "old range", StartLine: 2, EndLine: 9},
+			diff: model.Diff{
+				Diff: "@@ -1,3 +1,3 @@\n one\n-old-a\n+new-a\n three\n" +
+					"@@ -8,3 +8,3 @@\n eight\n-old-b\n+new-b\n ten",
+				NewFileContent: "one\nnew-a\nthree\nfour\nfive\nsix\nseven\neight\nnew-b\nten\n",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			original := test.comment
+			if ResolveRevalidationComment(&test.comment, &test.diff) {
+				t.Fatal("expected ambiguous revalidation mapping to fail closed")
+			}
+			if test.comment != original {
+				t.Fatalf("comment mutated on failure: %#v", test.comment)
+			}
+		})
+	}
+}
+
+func TestResolveRevalidationCommentMatchesWholeLineWindows(t *testing.T) {
+	t.Run("unique line that is also a substring", func(t *testing.T) {
+		comment := model.LlmComment{ExistingCode: "target", StartLine: 2, EndLine: 2}
+		d := model.Diff{
+			Diff:           "@@ -1,2 +1,2 @@\n-other\n+target suffix\n target",
+			NewFileContent: "target suffix\ntarget\n",
+		}
+
+		if !ResolveRevalidationComment(&comment, &d) {
+			t.Fatal("expected unique full-line anchor to resolve")
+		}
+		if comment.ExistingCode != "target" || comment.StartLine != 2 || comment.EndLine != 2 {
+			t.Fatalf("comment = %#v", comment)
+		}
+	})
+
+	t.Run("overlapping repeated line range", func(t *testing.T) {
+		comment := model.LlmComment{ExistingCode: "old\na", StartLine: 1, EndLine: 2}
+		original := comment
+		d := model.Diff{
+			Diff:           "@@ -1,3 +1,3 @@\n-old\n+a\n a\n a",
+			NewFileContent: "a\na\na\n",
+		}
+
+		if ResolveRevalidationComment(&comment, &d) {
+			t.Fatal("expected overlapping repeated line anchor to fail closed")
+		}
+		if comment != original {
+			t.Fatalf("comment mutated on failure: %#v", comment)
+		}
+	})
+}

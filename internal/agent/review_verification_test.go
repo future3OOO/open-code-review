@@ -63,6 +63,13 @@ func authRevalidationFinding(existingCode string) model.LlmComment {
 	}
 }
 
+func authRevalidationFindingAt(existingCode string, start, end int) model.LlmComment {
+	finding := authRevalidationFinding(existingCode)
+	finding.StartLine = start
+	finding.EndLine = end
+	return finding
+}
+
 func reviewResponses(comments []map[string]any, verdict string) []*llm.ChatResponse {
 	return append([]*llm.ChatResponse{toolResponse("code_comment", map[string]any{"comments": comments})}, completedReviewResponses(verdict)...)
 }
@@ -647,6 +654,63 @@ func TestReviewRevalidatesOpenFindingAgainstDelta(t *testing.T) {
 	}
 }
 
+func TestReviewReanchorsPartialLinePriorFindingAgainstDelta(t *testing.T) {
+	repoDir := replayRepository(t)
+	runTestGit(t, repoDir, "commit", "-qm", "current head")
+	client := &reviewTestClient{responses: completedReviewResponses(`["c-0"]`)}
+	agent := newRangeReplayAgent(repoDir, client)
+	finding := authRevalidationFindingAt("allow = false", 3, 3)
+	agent.args.Revalidate = []model.LlmComment{finding}
+
+	findings := mustRunAgent(t, agent)
+	if len(findings) != 1 || findings[0].ExistingCode != "var allow = false" ||
+		findings[0].StartLine != 3 || findings[0].EndLine != 3 || len(agent.Warnings()) != 0 ||
+		agent.Coverage().Status != "complete" {
+		t.Fatalf("findings = %#v; warnings = %#v; coverage = %#v", findings, agent.Warnings(), agent.Coverage())
+	}
+}
+
+func TestReviewReanchorsPartiallyRewrittenPriorFindingAgainstDelta(t *testing.T) {
+	repoDir := t.TempDir()
+	runTestGit(t, repoDir, "init", "-q")
+	runTestGit(t, repoDir, "config", "user.email", "review@example.com")
+	runTestGit(t, repoDir, "config", "user.name", "Review Test")
+	oldAnchor := "\tfirst()\n\tsecond()\n\tthird()\n\tfourth()\n\tfifth()\n\tsixth()"
+	writeReplayFile(t, repoDir, "app.go", "package app\n\nfunc inventory() {\n"+oldAnchor+"\n}\n")
+	runTestGit(t, repoDir, "commit", "-qm", "reviewed head")
+	currentAnchor := "\treplacementA()\n\treplacementB()\n\tthird()\n\tfourth()\n\tfifth()\n\tsixth()"
+	writeReplayFile(t, repoDir, "app.go", "package app\n\nfunc inventory() {\n"+currentAnchor+"\n}\n")
+	runTestGit(t, repoDir, "commit", "-qm", "current head")
+	client := &reviewTestClient{responses: completedReviewResponses(`[]`)}
+	agent := newRangeReplayAgent(repoDir, client)
+	finding := authRevalidationFindingAt(oldAnchor, 4, 9)
+	agent.args.Revalidate = []model.LlmComment{finding}
+
+	findings := mustRunAgent(t, agent)
+	verifierPrompt := client.requests[1].Messages[0].ExtractText()
+	encodedCurrentAnchor, _ := json.Marshal(currentAnchor)
+	if len(findings) != 0 || len(agent.Warnings()) != 0 || agent.Coverage().Status != "complete" ||
+		!strings.Contains(verifierPrompt, `"existing_code":`+string(encodedCurrentAnchor)) ||
+		!strings.Contains(verifierPrompt, `"origin":"prior_open"`) {
+		t.Fatalf("findings = %#v; warnings = %#v; coverage = %#v; verifier = %s", findings, agent.Warnings(), agent.Coverage(), verifierPrompt)
+	}
+}
+
+func TestReviewKeepsUnmappedPriorFindingIncomplete(t *testing.T) {
+	repoDir := replayRepository(t)
+	runTestGit(t, repoDir, "commit", "-qm", "current head")
+	agent := newRangeReplayAgent(repoDir, &reviewTestClient{responses: completedReviewResponses(`[]`)})
+	finding := authRevalidationFindingAt("not present at the reviewed head", 3, 3)
+	agent.args.Revalidate = []model.LlmComment{finding}
+
+	findings := mustRunAgent(t, agent)
+	warnings := agent.Warnings()
+	if len(findings) != 0 || len(warnings) != 1 || warnings[0].Type != "revalidation_incomplete" ||
+		agent.Coverage().Status != "incomplete" {
+		t.Fatalf("findings = %#v; warnings = %#v; coverage = %#v", findings, warnings, agent.Coverage())
+	}
+}
+
 func TestReviewRevalidatesPriorFindingOutsideChangedLines(t *testing.T) {
 	client := &reviewTestClient{responses: completedReviewResponses(`["c-0"]`)}
 	agent := newReplayAgent(replayRepository(t), client)
@@ -851,6 +915,13 @@ func newReplayAgent(repoDir string, client llm.LLMClient) *Agent {
 			MaxTokens: 10_000, MaxToolRequestTimes: 2,
 		},
 	})
+}
+
+func newRangeReplayAgent(repoDir string, client llm.LLMClient) *Agent {
+	agent := newReplayAgent(repoDir, client)
+	agent.args.From = "HEAD~1"
+	agent.args.To = "HEAD"
+	return agent
 }
 
 func replayRepository(t *testing.T) string {
