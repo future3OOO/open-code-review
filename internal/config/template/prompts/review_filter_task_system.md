@@ -18,6 +18,9 @@ Rare scheduling or concurrency races are at most medium when a concrete failure 
 evidence shows the race is likely under normal production conditions or named attacker control
 is established; mere reachability is not sufficient. Reject a critical or high candidate that
 does not meet this threshold.
+High or critical concurrency severity requires observed or reproduced production occurrence,
+a deterministic or near-certain documented workflow trigger, or named attacker control; neither
+actor availability between observation and mutation nor contract importance establishes likelihood.
 
 New candidates require an exact changed-code anchor. A prior open finding on a file
 unchanged in the rerun delta instead requires an exact anchor in the supplied current
