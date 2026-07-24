@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/open-code-review/open-code-review/internal/model"
@@ -67,6 +68,145 @@ func ResolveComment(cm *model.LlmComment, d *model.Diff) bool {
 		return true
 	}
 	return resolveFromFileContent(d, cm)
+}
+
+// ResolveRevalidationComment resolves a previously published comment against
+// current-file source, using its old line range when the anchor text changed.
+func ResolveRevalidationComment(cm *model.LlmComment, d *model.Diff) bool {
+	oldStart, oldEnd := cm.StartLine, cm.EndLine
+	current := *cm
+	current.StartLine = 0
+	current.EndLine = 0
+	if resolveFromFileContent(d, &current) && setCurrentRange(&current, d, current.StartLine, current.EndLine) {
+		*cm = current
+		return true
+	}
+
+	hunks := ParseHunks(d.Diff)
+	start, end, ok := mapOldRange(hunks, oldStart, oldEnd)
+	if !ok || !setCurrentRange(&current, d, start, end) {
+		return false
+	}
+	anchor := strings.Join(splitAndNormalize(cm.ExistingCode), "\n")
+	currentAnchor := strings.Join(splitAndNormalize(current.ExistingCode), "\n")
+	if !strings.Contains(currentAnchor, anchor) &&
+		!oldRangeContainsAnchor(hunks, oldStart, oldEnd, anchor) {
+		return false
+	}
+	*cm = current
+	return true
+}
+
+func mapOldRange(hunks []Hunk, start, end int) (int, int, bool) {
+	if start <= 0 || end < start {
+		return 0, 0, false
+	}
+	overlaps := 0
+	for i := range hunks {
+		hunkEnd := hunks[i].OldStart + hunks[i].OldCount - 1
+		if hunks[i].OldCount > 0 && start <= hunkEnd && end >= hunks[i].OldStart {
+			overlaps++
+		}
+	}
+	if overlaps > 1 {
+		return 0, 0, false
+	}
+	mappedStart, startOK := mapOldBoundary(hunks, start, false)
+	mappedEnd, endOK := mapOldBoundary(hunks, end, true)
+	return mappedStart, mappedEnd, startOK && endOK && mappedStart <= mappedEnd
+}
+
+func mapOldBoundary(hunks []Hunk, target int, endBoundary bool) (int, bool) {
+	shift := 0
+	for i := range hunks {
+		hunk := &hunks[i]
+		if target < hunk.OldStart {
+			return target + shift, true
+		}
+		if target >= hunk.OldStart+hunk.OldCount {
+			shift += hunk.NewCount - hunk.OldCount
+			continue
+		}
+		oldLine, newLine := hunk.OldStart, hunk.NewStart
+		for lineIndex := 0; lineIndex < len(hunk.Lines); {
+			if hunk.Lines[lineIndex].Type == HunkContext {
+				if oldLine == target {
+					return newLine, true
+				}
+				oldLine++
+				newLine++
+				lineIndex++
+				continue
+			}
+
+			blockNewStart := newLine
+			containsTarget := false
+			added := 0
+			for lineIndex < len(hunk.Lines) && hunk.Lines[lineIndex].Type != HunkContext {
+				switch hunk.Lines[lineIndex].Type {
+				case HunkAdded:
+					added++
+					newLine++
+				case HunkDeleted:
+					containsTarget = containsTarget || oldLine == target
+					oldLine++
+				}
+				lineIndex++
+			}
+			if containsTarget {
+				if added == 0 {
+					return 0, false
+				}
+				if endBoundary {
+					return blockNewStart + added - 1, true
+				}
+				return blockNewStart, true
+			}
+		}
+		return 0, false
+	}
+	return target + shift, true
+}
+
+func oldRangeContainsAnchor(hunks []Hunk, start, end int, anchor string) bool {
+	if anchor == "" {
+		return false
+	}
+	var lines []string
+	for i := range hunks {
+		for _, line := range extractSideLines(&hunks[i], false) {
+			if line.lineNum >= start && line.lineNum <= end {
+				lines = append(lines, line.content)
+			}
+		}
+	}
+	oldRange := strings.Join(splitAndNormalize(strings.Join(lines, "\n")), "\n")
+	return oldRange != "" && (strings.Contains(oldRange, anchor) || strings.Contains(anchor, oldRange))
+}
+
+func setCurrentRange(cm *model.LlmComment, d *model.Diff, start, end int) bool {
+	lines := strings.Split(d.NewFileContent, "\n")
+	if start <= 0 || end < start || end > len(lines) {
+		return false
+	}
+	block := lines[start-1 : end]
+	anchor := strings.Join(block, "\n")
+	if strings.TrimSpace(anchor) == "" {
+		return false
+	}
+	matches := 0
+	for i := 0; i+len(block) <= len(lines); i++ {
+		if slices.Equal(lines[i:i+len(block)], block) {
+			matches++
+		}
+	}
+	if matches != 1 {
+		return false
+	}
+	cm.ExistingCode = anchor
+	cm.StartLine = start
+	cm.EndLine = end
+	return true
 }
 
 // indexedLine pairs a normalized line with its absolute file line number.

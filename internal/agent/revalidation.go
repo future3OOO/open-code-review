@@ -61,9 +61,7 @@ func (a *Agent) seedRevalidationFindings(d model.Diff) {
 			continue
 		}
 		finding.Path = d.NewPath
-		finding.StartLine = 0
-		finding.EndLine = 0
-		if !diff.ResolveComment(&finding, &d) {
+		if !diff.ResolveRevalidationComment(&finding, &d) {
 			a.recordWarning("revalidation_incomplete", finding.Path, "open finding anchor could not be resolved in this rerun delta")
 			continue
 		}
