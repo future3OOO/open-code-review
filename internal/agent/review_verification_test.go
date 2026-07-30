@@ -121,6 +121,40 @@ func TestReviewReplayConvergesOnPositivelyVerifiedFindings(t *testing.T) {
 	}
 }
 
+func TestReviewConvergesRediscoveredFindingOnPriorIdentity(t *testing.T) {
+	repoDir := t.TempDir()
+	runTestGit(t, repoDir, "init", "-q")
+	runTestGit(t, repoDir, "config", "user.email", "review@example.com")
+	runTestGit(t, repoDir, "config", "user.name", "Review Test")
+	writeReplayFile(t, repoDir, "agent.go", "package agent\n\nfunc publishableSeverity(severity string) bool {\nreturn severity == \"critical\" ||\n\t\tseverity == \"high\" ||\n\t\tseverity == \"medium\"\n}\n")
+	runTestGit(t, repoDir, "commit", "-qm", "base")
+	existingCode := "return severity == \"critical\" ||\n\t\tseverity == \"medium\""
+	suggestionCode := "return severity == \"critical\" ||\n\t\tseverity == \"high\" ||\n\t\tseverity == \"medium\""
+	writeReplayFile(t, repoDir, "agent.go", "package agent\n\nfunc publishableSeverity(severity string) bool {\n"+existingCode+"\n}\n")
+	prior := model.LlmComment{
+		Path: "agent.go", Content: "Restore the `high` case.", Severity: "high",
+		FailureMode:      "Verified high-severity findings are discarded before publication.",
+		ViolatedContract: "The publication filter must retain all supported publishable severities.",
+		Evidence:         "The predicate returns false for `high`.", ExistingCode: existingCode,
+		SuggestionCode: suggestionCode, StartLine: 999, EndLine: 999,
+	}
+	rediscovered := map[string]any{
+		"content":  "`publishableSeverity` rejects every `high`-severity comment.",
+		"severity": "high", "failure_mode": "Every verified high finding is removed.",
+		"violated_contract": "Critical, high, and medium findings are publishable.",
+		"evidence":          "The changed predicate omits `high`.", "existing_code": existingCode,
+		"suggestion_code": suggestionCode,
+	}
+	client := &reviewTestClient{responses: reviewResponses([]map[string]any{rediscovered}, `["c-0","c-1"]`)}
+	agent := newReplayAgent(repoDir, client)
+	agent.args.Revalidate = []model.LlmComment{prior}
+
+	findings := mustRunAgent(t, agent)
+	if len(findings) != 1 || findings[0].Content != prior.Content {
+		t.Fatalf("findings = %#v, want the prior finding only", findings)
+	}
+}
+
 func TestReviewVerifierDoesNotEmbedWholeLargeFile(t *testing.T) {
 	repoDir := t.TempDir()
 	runTestGit(t, repoDir, "init", "-q")
