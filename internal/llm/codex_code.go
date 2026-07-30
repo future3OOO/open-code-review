@@ -12,7 +12,7 @@ import (
 )
 
 const defaultCodexCodeTimeout = 5 * time.Minute
-const codexCodeProtocolSchema = `{"type":"object","properties":{"content":{"type":"string"},"tool_calls":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"arguments":{"type":"string"}},"required":["id","name","arguments"],"additionalProperties":false}}},"required":["content","tool_calls"],"additionalProperties":false}`
+const codexCodeProtocolSchema = `{"type":"object","properties":{"content":{"type":"string"},"tool_calls":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"},"arguments":{"type":"string","description":"JSON-encoded object matching the selected tool's parameters"}},"required":["id","name","arguments"],"additionalProperties":false}}},"required":["content","tool_calls"],"additionalProperties":false}`
 
 var codexCodeEnvNames = []string{
 	"HOME",
@@ -108,11 +108,28 @@ func (c *CodexCodeClient) CompletionsWithCtx(ctx context.Context, req ChatReques
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	out, err := runCodexCodeCommand(ctx, command, prompt, codexCodeEnvironment())
-	if err != nil {
-		return nil, err
+	var retryUsage *UsageInfo
+	for attempt := 0; ; attempt++ {
+		out, err := runCodexCodeCommand(ctx, command, prompt, codexCodeEnvironment())
+		if err != nil {
+			return nil, err
+		}
+		response, err := parseCodexCodeResponse(out, model, req.Tools)
+		if err == nil {
+			if retryUsage != nil {
+				response.Usage.TotalTokens += retryUsage.TotalTokens
+				response.Usage.PromptTokens += retryUsage.PromptTokens
+				response.Usage.CompletionTokens += retryUsage.CompletionTokens
+				response.Usage.CacheReadTokens += retryUsage.CacheReadTokens
+			}
+			return response, nil
+		}
+		if attempt > 0 || err.Error() != "claude-code tool call arguments string was not JSON" {
+			return nil, err
+		}
+		retryUsage = response.Usage
+		prompt += "\nCorrection: tool_calls[].arguments must be a JSON string whose decoded value is an object matching the selected tool's parameters."
 	}
-	return parseCodexCodeResponse(out, model, req.Tools)
 }
 
 func parseCodexCodeResponse(raw []byte, model string, allowedTools []ToolDef) (*ChatResponse, error) {
@@ -151,7 +168,7 @@ func parseCodexCodeResponse(raw []byte, model string, allowedTools []ToolDef) (*
 	}
 	response, err := parseClaudeCodeResponse([]byte(finalOutput), model, allowedTools)
 	if err != nil {
-		return nil, err
+		return &ChatResponse{Usage: usage}, err
 	}
 	response.Usage = usage
 	return response, nil
