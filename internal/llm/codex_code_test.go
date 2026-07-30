@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -40,8 +41,8 @@ func TestCodexCodeClientReturnsToolCallsFromStructuredOutput(t *testing.T) {
 		if !json.Valid(schema) || !strings.Contains(prompt, "trusted_tools") {
 			t.Fatalf("schema = %s; prompt = %s", schema, prompt)
 		}
-		if !strings.Contains(string(schema), `"arguments":{"type":"string"}`) ||
-			!strings.Contains(prompt, `"arguments":{"type":"string"}`) {
+		if !strings.Contains(string(schema), `"arguments":{"type":"string","description":"JSON-encoded object matching the selected tool's parameters"}`) ||
+			!strings.Contains(prompt, `"arguments":{"type":"string","description":"JSON-encoded object matching the selected tool's parameters"}`) {
 			t.Fatalf("Codex arguments contract is not a JSON string: schema = %s; prompt = %s", schema, prompt)
 		}
 		return []byte("{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"content\\\":\\\"\\\",\\\"tool_calls\\\":[{\\\"id\\\":\\\"call-1\\\",\\\"name\\\":\\\"code_comment\\\",\\\"arguments\\\":\\\"{\\\\\\\"comments\\\\\\\":[]}\\\"}]}\"}}\n" +
@@ -99,6 +100,70 @@ func TestCodexCodeClientRejectsMissingTerminalUsage(t *testing.T) {
 	_, err := client.CompletionsWithCtx(context.Background(), ChatRequest{Messages: []Message{NewTextMessage("user", "review")}})
 	if err == nil || !strings.Contains(err.Error(), "terminal usage") {
 		t.Fatalf("error = %v, want missing terminal usage", err)
+	}
+}
+
+func TestCodexCodeClientRetriesOnlyMalformedArgumentString(t *testing.T) {
+	oldRunner := runCodexCodeCommand
+	malformed := `{"content":"","tool_calls":[{"id":"call-1","name":"code_comment","arguments":"not json"}]}`
+	responses := []string{
+		malformed,
+		`{"content":"","tool_calls":[{"id":"call-1","name":"code_comment","arguments":"{\"comments\":[]}"}]}`,
+	}
+	calls := 0
+	runCodexCodeCommand = func(_ context.Context, _ []string, _ string, _ []string) ([]byte, error) {
+		response := responses[calls]
+		calls++
+		return []byte(fmt.Sprintf(
+			"{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":%q}}\n"+
+				"{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":80,\"output_tokens\":20}}\n",
+			response,
+		)), nil
+	}
+	t.Cleanup(func() { runCodexCodeCommand = oldRunner })
+
+	client := NewLLMClient(ResolvedEndpoint{Protocol: "codex-code", Model: "gpt-5.6-sol"})
+	request := ChatRequest{
+		Messages: []Message{NewTextMessage("user", "review")},
+		Tools: []ToolDef{{
+			Type: "function",
+			Function: FunctionDef{
+				Name:       "code_comment",
+				Parameters: map[string]any{"type": "object"},
+			},
+		}},
+	}
+	response, err := client.CompletionsWithCtx(context.Background(), request)
+	if err != nil {
+		t.Fatalf("completion failed: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("Codex calls = %d, want one corrective retry", calls)
+	}
+	toolCalls := response.ToolCalls()
+	if len(toolCalls) != 1 || toolCalls[0].Function.Arguments != `{"comments":[]}` {
+		t.Fatalf("tool calls = %#v", toolCalls)
+	}
+	if response.Usage == nil || response.Usage.PromptTokens != 200 || response.Usage.CompletionTokens != 40 || response.Usage.TotalTokens != 240 || response.Usage.CacheReadTokens != 160 {
+		t.Fatalf("usage = %#v", response.Usage)
+	}
+
+	responses = []string{malformed, malformed}
+	calls = 0
+	if _, err := client.CompletionsWithCtx(context.Background(), request); err == nil || err.Error() != "claude-code tool call arguments string was not JSON" {
+		t.Fatalf("second malformed completion error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("Codex calls after second malformed response = %d, want 2", calls)
+	}
+
+	responses = []string{`{"content":"","tool_calls":[{"id":"call-1","name":"unavailable","arguments":"{}"}]}`}
+	calls = 0
+	if _, err := client.CompletionsWithCtx(context.Background(), request); err == nil || !strings.Contains(err.Error(), "unavailable tool") {
+		t.Fatalf("unavailable tool error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("Codex calls after unrelated error = %d, want 1", calls)
 	}
 }
 
