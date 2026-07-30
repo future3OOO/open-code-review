@@ -1080,8 +1080,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 	return fmt.Errorf("review did not complete with task_done")
 }
 
-// executeToolCall executes a single tool call from the LLM response and records
-// the result in session history.
+// executeToolCall executes a single tool call from the LLM response and records the result in session history.
 func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.ToolCall, rec *session.TaskRecord) tool.TaskCheckpoint {
 	t := tool.OfName(call.Function.Name)
 	if !t.IsKnown() {
@@ -1115,7 +1114,6 @@ func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.To
 
 	startTime := time.Now()
 
-	// code_comment: parse → resolve line numbers → re-locate if needed → add to collector
 	if t == tool.CodeComment {
 		telemetry.PrintToolCallStarted(t.Name(), args)
 
@@ -1134,8 +1132,7 @@ func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.To
 						rlStart := time.Now()
 						_, resp, msgs := diff.ReLocateComment(rctx, cm, d, a.args.LLMClient, a.args.Template.ReLocationTask, a.args.Model, a.args.Template.MaxTokens)
 						if msgs != nil {
-							fs := a.session.GetOrCreateFileSession(cm.Path)
-							rlRec := fs.AppendTaskRecord(session.ReLocationTask, msgs)
+							rlRec := a.session.GetOrCreateFileSession(cm.Path).AppendTaskRecord(session.ReLocationTask, msgs)
 							if resp != nil {
 								rlRec.SetResponse(resp, time.Since(rlStart))
 								a.recordUsage(resp.Usage)
@@ -1145,7 +1142,9 @@ func (a *Agent) executeToolCall(ctx context.Context, newPath string, call llm.To
 						}
 					}
 				}
-				a.args.CommentCollector.Add(*cm)
+				if cm.StartLine > 0 && cm.EndLine > 0 {
+					a.args.CommentCollector.Add(*cm)
+				}
 			}
 		}
 
