@@ -696,8 +696,7 @@ func (a *Agent) executeReviewFilter(ctx context.Context, d model.Diff, newPath s
 			remove[index] = struct{}{}
 		}
 	}
-	a.args.CommentCollector.RemoveByPathAndIndices(newPath, remove)
-	fmt.Fprintf(stdout.Writer(), "[ocr] Review filter retained %d of %d comment(s) for %s\n", len(comments)-len(remove), len(comments), newPath)
+	a.applyVerifiedFindings(newPath, comments, revalidationStart, remove)
 }
 
 func (a *Agent) discardUnverifiedComments(path string, comments []model.LlmComment, message string) {

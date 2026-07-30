@@ -11,6 +11,7 @@ import (
 	"github.com/open-code-review/open-code-review/internal/llm"
 	"github.com/open-code-review/open-code-review/internal/model"
 	"github.com/open-code-review/open-code-review/internal/session"
+	"github.com/open-code-review/open-code-review/internal/stdout"
 	reviewtool "github.com/open-code-review/open-code-review/internal/tool"
 )
 
@@ -67,6 +68,36 @@ func (a *Agent) seedRevalidationFindings(d model.Diff) {
 		}
 		a.args.CommentCollector.Add(finding)
 	}
+}
+
+func (a *Agent) applyVerifiedFindings(path string, comments []model.LlmComment, revalidationStart int, remove map[int]struct{}) {
+	type verifiedFix struct {
+		path, severity, existingCode, suggestionCode string
+		startLine, endLine                           int
+	}
+	identity := func(comment model.LlmComment) (verifiedFix, bool) {
+		return verifiedFix{
+			comment.Path, comment.Severity, comment.ExistingCode, comment.SuggestionCode,
+			comment.StartLine, comment.EndLine,
+		}, comment.ExistingCode != "" && comment.SuggestionCode != ""
+	}
+	priorFixes := make(map[verifiedFix]struct{}, len(comments)-revalidationStart)
+	for index := revalidationStart; index < len(comments); index++ {
+		if fix, ok := identity(comments[index]); ok {
+			if _, removed := remove[index]; !removed {
+				priorFixes[fix] = struct{}{}
+			}
+		}
+	}
+	for index := 0; index < revalidationStart; index++ {
+		if fix, ok := identity(comments[index]); ok {
+			if _, duplicate := priorFixes[fix]; duplicate {
+				remove[index] = struct{}{}
+			}
+		}
+	}
+	a.args.CommentCollector.RemoveByPathAndIndices(path, remove)
+	fmt.Fprintf(stdout.Writer(), "[ocr] Review filter retained %d of %d comment(s) for %s\n", len(comments)-len(remove), len(comments), path)
 }
 
 func priorFindingSource(content string, findings []model.LlmComment, tokenBudget int) (string, map[int]struct{}) {
