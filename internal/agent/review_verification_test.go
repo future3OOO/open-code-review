@@ -254,6 +254,18 @@ func TestReviewForcesCandidatePathToCurrentFile(t *testing.T) {
 	}
 }
 
+func TestReviewDropsCandidateWhenAnchorCannotBeResolved(t *testing.T) {
+	candidate := authCandidate()
+	candidate["existing_code"] = "raw_diff = git_text(repo, [*diff_args, \"--unified=0\"]))"
+	client := &reviewTestClient{responses: reviewResponses([]map[string]any{candidate}, `["c-0"]`)}
+	agent := newReplayAgent(replayRepository(t), client)
+
+	findings := mustRunAgent(t, agent)
+	if len(findings) != 0 || len(client.requests) != 2 || agent.Coverage().Status != "complete" {
+		t.Fatalf("findings = %#v; requests = %d; coverage = %#v", findings, len(client.requests), agent.Coverage())
+	}
+}
+
 func TestReviewVerifierPreservesTemplateTokensInSource(t *testing.T) {
 	repoDir := replayRepository(t)
 	writeReplayFile(t, repoDir, "app.go", "package app\n\nvar template = \"{{comments}}\"\n")
