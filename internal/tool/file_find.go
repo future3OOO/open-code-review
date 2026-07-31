@@ -13,7 +13,7 @@ const (
 	fileFindTimeout  = 10 * time.Second
 )
 
-// FileFindProvider finds files by name or pattern in the repository using git ls-files.
+// FileFindProvider finds files by path keyword in the repository using git ls-files.
 type FileFindProvider struct {
 	FileReader *FileReader
 }
@@ -29,6 +29,9 @@ func (p *FileFindProvider) Execute(ctx context.Context, args map[string]any) (st
 	}
 
 	caseSensitive, _ := args["case_sensitive"].(bool)
+	if !caseSensitive {
+		queryName = strings.ToLower(queryName)
+	}
 
 	files, err := p.listGitFiles(ctx)
 	if err != nil {
@@ -37,17 +40,11 @@ func (p *FileFindProvider) Execute(ctx context.Context, args map[string]any) (st
 
 	var matched []string
 	for _, f := range files {
-		base := f
-		if idx := strings.LastIndex(f, "/"); idx != -1 {
-			base = f[idx+1:]
+		path := f
+		if !caseSensitive {
+			path = strings.ToLower(path)
 		}
-		match := false
-		if caseSensitive {
-			match = strings.Contains(base, queryName)
-		} else {
-			match = strings.Contains(strings.ToLower(base), strings.ToLower(queryName))
-		}
-		if match {
+		if strings.Contains(path, queryName) {
 			matched = append(matched, f)
 		}
 		if len(matched) >= fileFindMaxCount {
