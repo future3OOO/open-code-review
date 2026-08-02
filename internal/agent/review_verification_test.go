@@ -132,7 +132,7 @@ func TestReviewConvergesRediscoveredFindingOnPriorIdentity(t *testing.T) {
 	suggestionCode := "return severity == \"critical\" ||\n\t\tseverity == \"high\" ||\n\t\tseverity == \"medium\""
 	writeReplayFile(t, repoDir, "agent.go", "package agent\n\nfunc publishableSeverity(severity string) bool {\n"+existingCode+"\n}\n")
 	prior := model.LlmComment{
-		Path: "agent.go", Content: "Restore the `high` case.", Severity: "high",
+		InstanceID: "fi1:prior", Path: "agent.go", Content: "Restore the `high` case.", Severity: "medium",
 		FailureMode:      "Verified high-severity findings are discarded before publication.",
 		ViolatedContract: "The publication filter must retain all supported publishable severities.",
 		Evidence:         "The predicate returns false for `high`.", ExistingCode: existingCode,
@@ -143,15 +143,18 @@ func TestReviewConvergesRediscoveredFindingOnPriorIdentity(t *testing.T) {
 		"severity": "high", "failure_mode": "Every verified high finding is removed.",
 		"violated_contract": "Critical, high, and medium findings are publishable.",
 		"evidence":          "The changed predicate omits `high`.", "existing_code": existingCode,
-		"suggestion_code": suggestionCode,
+		"suggestion_code": suggestionCode + " // rediscovered",
 	}
 	client := &reviewTestClient{responses: reviewResponses([]map[string]any{rediscovered}, `["c-0","c-1"]`)}
 	agent := newReplayAgent(repoDir, client)
 	agent.args.Revalidate = []model.LlmComment{prior}
 
 	findings := mustRunAgent(t, agent)
-	if len(findings) != 1 || findings[0].Content != prior.Content {
+	if len(findings) != 1 || findings[0].Content != prior.Content || findings[0].InstanceID != prior.InstanceID {
 		t.Fatalf("findings = %#v, want the prior finding only", findings)
+	}
+	if verifierPrompt := requestText(client.requests[2]); strings.Contains(verifierPrompt, prior.InstanceID) {
+		t.Fatalf("verifier prompt contains internal finding identity: %s", verifierPrompt)
 	}
 }
 

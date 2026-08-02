@@ -23,7 +23,6 @@ type reviewContextFile struct {
 
 type reviewContextFinding struct {
 	model.LlmComment
-	InstanceID string `json:"instance_id"`
 }
 
 type reviewContextInput struct {
