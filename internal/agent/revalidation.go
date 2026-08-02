@@ -71,29 +71,34 @@ func (a *Agent) seedRevalidationFindings(d model.Diff) {
 }
 
 func (a *Agent) applyVerifiedFindings(path string, comments []model.LlmComment, revalidationStart int, remove map[int]struct{}) {
-	type verifiedFix struct {
-		path, severity, existingCode, suggestionCode string
-		startLine, endLine                           int
+	type verifiedAnchor struct {
+		path, existingCode string
+		startLine, endLine int
 	}
-	identity := func(comment model.LlmComment) (verifiedFix, bool) {
-		return verifiedFix{
-			comment.Path, comment.Severity, comment.ExistingCode, comment.SuggestionCode,
-			comment.StartLine, comment.EndLine,
-		}, comment.ExistingCode != "" && comment.SuggestionCode != ""
+	identity := func(comment model.LlmComment) (verifiedAnchor, bool) {
+		return verifiedAnchor{
+			comment.Path, comment.ExistingCode, comment.StartLine, comment.EndLine,
+		}, comment.ExistingCode != ""
 	}
-	priorFixes := make(map[verifiedFix]struct{}, len(comments)-revalidationStart)
+	priorCounts := make(map[verifiedAnchor]int, len(comments)-revalidationStart)
 	for index := revalidationStart; index < len(comments); index++ {
-		if fix, ok := identity(comments[index]); ok {
+		if anchor, ok := identity(comments[index]); ok && comments[index].InstanceID != "" {
 			if _, removed := remove[index]; !removed {
-				priorFixes[fix] = struct{}{}
+				priorCounts[anchor]++
+			}
+		}
+	}
+	newCounts := make(map[verifiedAnchor]int, revalidationStart)
+	for index := 0; index < revalidationStart; index++ {
+		if anchor, ok := identity(comments[index]); ok {
+			if _, removed := remove[index]; !removed {
+				newCounts[anchor]++
 			}
 		}
 	}
 	for index := 0; index < revalidationStart; index++ {
-		if fix, ok := identity(comments[index]); ok {
-			if _, duplicate := priorFixes[fix]; duplicate {
-				remove[index] = struct{}{}
-			}
+		if anchor, ok := identity(comments[index]); ok && priorCounts[anchor] == 1 && newCounts[anchor] == 1 {
+			remove[index] = struct{}{}
 		}
 	}
 	a.args.CommentCollector.RemoveByPathAndIndices(path, remove)

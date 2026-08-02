@@ -725,6 +725,7 @@ func buildFilterCommentsJSON(comments []model.LlmComment, revalidationStart int)
 		if i >= revalidationStart {
 			origin = "prior_open"
 		}
+		cm.InstanceID = ""
 		items[i] = filterComment{
 			ID:         fmt.Sprintf("c-%d", i),
 			Origin:     origin,

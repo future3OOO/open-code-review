@@ -290,7 +290,7 @@ func TestLoadReviewContextAcceptsFleetContextGraphShape(t *testing.T) {
 	if context.Paths["src/z.py"] != "context for z.py" {
 		t.Fatalf("src/z.py context = %q", context.Paths["src/z.py"])
 	}
-	if len(context.Revalidate) != 1 || context.Revalidate[0].Path != "src/app.py" {
+	if len(context.Revalidate) != 1 || context.Revalidate[0].Path != "src/app.py" || context.Revalidate[0].InstanceID != "fi1:auth" {
 		t.Fatalf("revalidate = %#v", context.Revalidate)
 	}
 }
