@@ -47,6 +47,10 @@ func (a *Agent) revalidateUnchangedPaths(ctx context.Context) {
 			finding.StartLine = 0
 			finding.EndLine = 0
 			if !diff.ResolveComment(&finding, &current) {
+				_, absent := diff.ResolveRevalidationComment(&finding, &current)
+				if absent {
+					continue
+				}
 				a.recordWarning("revalidation_incomplete", path, "open finding anchor could not be resolved at the target ref")
 				continue
 			}
@@ -62,7 +66,11 @@ func (a *Agent) seedRevalidationFindings(d model.Diff) {
 			continue
 		}
 		finding.Path = d.NewPath
-		if !diff.ResolveRevalidationComment(&finding, &d) {
+		resolved, absent := diff.ResolveRevalidationComment(&finding, &d)
+		if absent {
+			continue
+		}
+		if !resolved {
 			a.recordWarning("revalidation_incomplete", finding.Path, "open finding anchor could not be resolved in this rerun delta")
 			continue
 		}

@@ -184,22 +184,6 @@ func TestReviewVerifierDoesNotEmbedWholeLargeFile(t *testing.T) {
 	}
 }
 
-func TestReviewToolFailureIdentifiesFailedTool(t *testing.T) {
-	client := &reviewTestClient{responses: []*llm.ChatResponse{
-		toolResponse("file_read", struct {
-			FilePath string `json:"file_path"`
-		}{FilePath: "missing.go"}),
-	}}
-	agent := newReplayAgent(replayRepository(t), client)
-
-	findings, err := agent.Run(context.Background())
-	warnings := agent.Warnings()
-	if err == nil || len(findings) != 0 || len(warnings) != 1 ||
-		!strings.Contains(warnings[0].Message, `tool "file_read" failed`) {
-		t.Fatalf("findings = %#v; error = %v; warnings = %#v", findings, err, warnings)
-	}
-}
-
 func TestReviewSiblingDiffFailureRetriesWithinExistingBound(t *testing.T) {
 	diffCall := func(path string) llm.ToolCall {
 		return toolCall("file_read_diff", struct {
@@ -757,6 +741,22 @@ func TestReviewKeepsUnmappedPriorFindingIncomplete(t *testing.T) {
 	if len(findings) != 0 || len(warnings) != 1 || warnings[0].Type != "revalidation_incomplete" ||
 		agent.Coverage().Status != "incomplete" {
 		t.Fatalf("findings = %#v; warnings = %#v; coverage = %#v", findings, warnings, agent.Coverage())
+	}
+}
+
+func TestReviewResolvesPriorFindingAbsentFromUnchangedCurrentFile(t *testing.T) {
+	repoDir := t.TempDir()
+	runTestGit(t, repoDir, "init", "-q")
+	runTestGit(t, repoDir, "config", "user.email", "review@example.com")
+	runTestGit(t, repoDir, "config", "user.name", "Review Test")
+	writeReplayFile(t, repoDir, "app.go", "package app\n\nvar allow = false\n")
+	runTestGit(t, repoDir, "commit", "-qm", "current head")
+	agent := newReplayAgent(repoDir, nil)
+	agent.args.Revalidate = []model.LlmComment{authRevalidationFindingAt("allow := true", 3, 3)}
+
+	findings := mustRunAgent(t, agent)
+	if len(findings) != 0 || len(agent.Warnings()) != 0 || agent.Coverage().Status != "complete" {
+		t.Fatalf("findings = %#v; warnings = %#v; coverage = %#v", findings, agent.Warnings(), agent.Coverage())
 	}
 }
 

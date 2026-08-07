@@ -795,7 +795,8 @@ func TestResolveRevalidationCommentRejectsAmbiguousMapping(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			original := test.comment
-			if ResolveRevalidationComment(&test.comment, &test.diff) {
+			resolved, absent := ResolveRevalidationComment(&test.comment, &test.diff)
+			if resolved || absent {
 				t.Fatal("expected ambiguous revalidation mapping to fail closed")
 			}
 			if test.comment != original {
@@ -813,7 +814,8 @@ func TestResolveRevalidationCommentMatchesWholeLineWindows(t *testing.T) {
 			NewFileContent: "target suffix\ntarget\n",
 		}
 
-		if !ResolveRevalidationComment(&comment, &d) {
+		resolved, absent := ResolveRevalidationComment(&comment, &d)
+		if !resolved || absent {
 			t.Fatal("expected unique full-line anchor to resolve")
 		}
 		if comment.ExistingCode != "target" || comment.StartLine != 2 || comment.EndLine != 2 {
@@ -829,11 +831,26 @@ func TestResolveRevalidationCommentMatchesWholeLineWindows(t *testing.T) {
 			NewFileContent: "a\na\na\n",
 		}
 
-		if ResolveRevalidationComment(&comment, &d) {
+		resolved, absent := ResolveRevalidationComment(&comment, &d)
+		if resolved || absent {
 			t.Fatal("expected overlapping repeated line anchor to fail closed")
 		}
 		if comment != original {
 			t.Fatalf("comment mutated on failure: %#v", comment)
 		}
 	})
+}
+
+func TestResolveRevalidationCommentReportsAbsentAnchorInFullPRAddedFile(t *testing.T) {
+	comment := model.LlmComment{ExistingCode: "old occurrence", StartLine: 320, EndLine: 323}
+	d := model.Diff{
+		IsNew:          true,
+		Diff:           "@@ -0,0 +1,2 @@\n+package app\n+var current = true",
+		NewFileContent: "package app\nvar current = true\n",
+	}
+
+	resolved, absent := ResolveRevalidationComment(&comment, &d)
+	if resolved || !absent {
+		t.Fatalf("resolved = %v, absent = %v; want vanished intermediate-head occurrence", resolved, absent)
+	}
 }
