@@ -85,6 +85,8 @@ func (c *CodexCodeClient) CompletionsWithCtx(ctx context.Context, req ChatReques
 	command := []string{
 		"codex", "exec", "--ephemeral", "--sandbox", "read-only",
 		"--skip-git-repo-check", "--model", model,
+		"-c", `model_provider="ocr-openai"`,
+		"-c", `model_providers.ocr-openai={ name="OpenAI", base_url="https://chatgpt.com/backend-api/codex", wire_api="responses", requires_openai_auth=true, supports_websockets=true, stream_idle_timeout_ms=600000 }`,
 		"-c", `model_reasoning_effort="medium"`,
 		"-c", "features.shell_tool=false",
 		"-c", "features.unified_exec=false",
