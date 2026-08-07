@@ -1020,9 +1020,7 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		}
 
 		var results []tool.ToolCallResult
-		taskCompleted := false
-		fatalTool := ""
-		retryableDiffFailure := false
+		taskCompleted, retryableReadFailure, fatalTool := false, false, ""
 
 		for _, call := range calls {
 			cp := a.executeToolCall(ctx, newPath, call, rec)
@@ -1035,8 +1033,9 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 				taskCompleted = true
 			} else if result != "" {
 				if strings.HasPrefix(result, "Error") {
-					if tool.OfName(call.Function.Name) == tool.FileReadDiff && lookupTool(a.args.Tools, tool.FileReadDiff) != nil {
-						retryableDiffFailure = true
+					calledTool := tool.OfName(call.Function.Name)
+					if (calledTool == tool.FileRead || calledTool == tool.FileReadDiff) && lookupTool(a.args.Tools, calledTool) != nil {
+						retryableReadFailure = true
 					} else if fatalTool == "" {
 						fatalTool = call.Function.Name
 					}
@@ -1053,11 +1052,11 @@ func (a *Agent) performLlmCodeReview(ctx context.Context, messages []llm.Message
 		if fatalTool != "" {
 			return fmt.Errorf("review task tool %q failed", fatalTool)
 		}
-		if retryableDiffFailure {
+		if retryableReadFailure {
 			taskCompleted = false
 			for i := range results {
 				if results[i].Name == tool.TaskDone.Name() {
-					results[i].Result = "Error: task_done cannot complete a round with a failed file_read_diff call."
+					results[i].Result = "Error: task_done cannot complete a round with a failed file read."
 				}
 			}
 		}

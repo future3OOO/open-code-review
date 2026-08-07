@@ -72,29 +72,34 @@ func ResolveComment(cm *model.LlmComment, d *model.Diff) bool {
 
 // ResolveRevalidationComment resolves a previously published comment against
 // current-file source, using its old line range when the anchor text changed.
-func ResolveRevalidationComment(cm *model.LlmComment, d *model.Diff) bool {
+// Absent is true only for loaded unchanged or newly-added current source that
+// no longer contains the anchor.
+func ResolveRevalidationComment(cm *model.LlmComment, d *model.Diff) (resolved, absent bool) {
 	oldStart, oldEnd := cm.StartLine, cm.EndLine
 	current := *cm
 	current.StartLine = 0
 	current.EndLine = 0
-	if resolveFromFileContent(d, &current) && setCurrentRange(&current, d, current.StartLine, current.EndLine) {
+	anchorPresent := resolveFromFileContent(d, &current)
+	if anchorPresent && setCurrentRange(&current, d, current.StartLine, current.EndLine) {
 		*cm = current
-		return true
+		return true, false
 	}
+	anchorAbsent := d.NewFileContent != "" && len(splitAndNormalize(cm.ExistingCode)) > 0 &&
+		!anchorPresent && (d.IsNew || d.Diff == "")
 
 	hunks := ParseHunks(d.Diff)
 	start, end, ok := mapOldRange(hunks, oldStart, oldEnd)
 	if !ok || !setCurrentRange(&current, d, start, end) {
-		return false
+		return false, anchorAbsent
 	}
 	anchor := strings.Join(splitAndNormalize(cm.ExistingCode), "\n")
 	currentAnchor := strings.Join(splitAndNormalize(current.ExistingCode), "\n")
 	if !strings.Contains(currentAnchor, anchor) &&
 		!oldRangeContainsAnchor(hunks, oldStart, oldEnd, anchor) {
-		return false
+		return false, anchorAbsent
 	}
 	*cm = current
-	return true
+	return true, false
 }
 
 func mapOldRange(hunks []Hunk, start, end int) (int, int, bool) {
