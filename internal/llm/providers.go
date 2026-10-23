@@ -64,6 +64,7 @@ var registry = []Provider{
 		Models: []string{
 			"gpt-5.6-sol",
 			"gpt-5.4",
+			"gpt-6.1-sol",
 		},
 	},
 	{

@@ -109,6 +109,9 @@ func runReview(args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve LLM endpoint: %w", err)
 	}
+	if ep.Protocol == "codex-code" {
+		tpl.MaxTokens = 200000
+	}
 
 	llmClient := llm.NewLLMClient(ep)
 	model := ep.Model
